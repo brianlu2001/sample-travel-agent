@@ -180,7 +180,8 @@ def test_targeted_selection_includes_incident_and_no_holdout():
 
 
 @pytest.mark.parametrize("invariants_pass", [True, False])
-def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkeypatch, invariants_pass):
+@pytest.mark.parametrize("operator_review", [True, False])
+def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkeypatch, invariants_pass, operator_review):
     from types import SimpleNamespace
     from quality import remediation, evaluation, config
     from quality.config import fingerprint
@@ -188,7 +189,10 @@ def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkey
     report = json.loads(store.rows("SELECT report FROM benchmarks WHERE id='baseline'")[0]["report"])
     report["evidence_hash"] = fingerprint([{k: r[k] for k in ("id", "event", "evaluation")} for r in rows])
     store.execute("UPDATE benchmarks SET report=? WHERE id='baseline'", (json.dumps(report),))
-    store.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,NULL)", ("incident", "incident", "open", 1, 1, json.dumps({"source": "live"})))
+    incident_data = {"source": "live"}
+    if operator_review:
+        incident_data["trigger"] = "operator_review"
+    store.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,NULL)", ("incident", "incident", "open", 1, 1, json.dumps(incident_data)))
     monkeypatch.setattr(remediation, "STATE", tmp_path)
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(evaluation, "evaluator_version", lambda: "judge")
@@ -214,6 +218,11 @@ def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkey
     row = store.rows("SELECT * FROM repairs WHERE id=?", (identifier,))[0]
     assert row["status"] == ("pr_open" if invariants_pass else "rejected")
     assert len(calls) == (1 if invariants_pass else 0)
+    assert json.loads(row["payload"])["trigger"] == ("operator_review" if operator_review else "live_chat_incident")
+    if invariants_pass:
+        body = (tmp_path / "repairs" / identifier / "pr-description.md").read_text(encoding="utf-8")
+        assert ("operator-requested review" in body) == operator_review
+        assert ("Triggered by a rolling live traffic quality incident" in body) != operator_review
 
 
 def test_stale_pr_head_blocks_checkpoint_approval(monkeypatch):

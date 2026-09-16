@@ -331,7 +331,9 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
         store.execute("UPDATE incidents SET repair_id=? WHERE id=?", (repair_id, incident_id))
     try:
         incident_rows = store.rows("SELECT * FROM incidents WHERE id=?", (incident_id,))
-        source = json.loads(incident_rows[0]["payload"]).get("source") if incident_rows else None
+        incident_data = json.loads(incident_rows[0]["payload"]) if incident_rows else {}
+        source = incident_data.get("source")
+        operator_review = incident_data.get("trigger") == "operator_review"
         payload['metric'] = json.loads(incident_rows[0]['payload']).get('metric') if incident_rows else None
         is_live = source in ("live", "scenario")
         if is_live:
@@ -351,7 +353,8 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
             if not evidence:
                 update(repair_id, "awaiting_human_evidence", {**payload, "summary": "No development failure evidence available; held-out examples remain excluded from patch generation."})
                 return repair_id
-        payload["trigger"] = ("scenario_incident" if source == "scenario" else "live_chat_incident") if is_live else "historical_offline_workflow"
+        payload["trigger"] = ("operator_review" if operator_review else
+                              ("scenario_incident" if source == "scenario" else "live_chat_incident") if is_live else "historical_offline_workflow")
         payload["evaluator_version"] = json.loads(baseline["manifest"])["evaluator_version"]
         payload["evidence_run_ids"] = [e["run_id"] for e in evidence]
         candidate_path = directory / "candidate.json"
@@ -415,7 +418,8 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
             rate = metric["pass_rate"]
             rows.append(f"| {name} | {rate:.1%} ({metric['pass']}/{metric['n']}) |" if rate is not None else f"| {name} | N/A |")
         body = ("## Problem and resulting behavior\n\n" + candidate["summary"] + "\n\n" + candidate["rationale"] +
-                (f"\n\nTriggered by a rolling {source} traffic quality incident. Sanitized failing conversations informed this patch. "
+                (("\n\nTriggered by an operator-requested review of recorded failures, not a rolling-window threshold breach. " if operator_review else
+                  f"\n\nTriggered by a rolling {source} traffic quality incident. ") + "Sanitized failing conversations informed this patch. "
                  + ("Scenario traffic consists of real agent executions on synthetic development inputs, kept separate from user chats. " if source == "scenario" else "")
                  + "A frozen reference dataset provides before/after validation; held-out cases remain excluded from diagnosis." if is_live else "") +
                 "\n\n## Validation\n\n" + "\n".join(rows) +
