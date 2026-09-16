@@ -37,6 +37,24 @@ def database(monkeypatch, tmp_path):
             con.execute(psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(psycopg.sql.Identifier(schema)))
 
 
+def test_versioned_history_queries_on_shared_database(database, monkeypatch):
+    from quality import dashboard
+    from quality.live_history import performance_history, assessment_for
+    from quality.email_history import delivery_history
+    monkeypatch.setattr(dashboard, "evaluator_version", lambda: "new-judge")
+    store.save_run({"id": "live", "created": 1, "source": "live", "version": "old-agent", "input": [], "tools": []})
+    old = {"version": "old-judge", "metrics": {"correctness": {"label": "fail"}}}
+    new = {"version": "new-judge", "metrics": {"correctness": {"label": "pass"}}}
+    store.execute("INSERT INTO evaluation_history VALUES(?,?,?,?,?)", ("live", "old-judge", 1, json.dumps(old), 2))
+    store.execute("UPDATE runs SET evaluation=? WHERE id=?", (json.dumps(new), "live"))
+    cohorts = performance_history("new-agent", "new-judge")["cohorts"]
+    assert len(cohorts) == 2 and all(c["conversation_count"] == 1 for c in cohorts)
+    assert dashboard.run_history(evaluation_version="old-judge", agent_version="old-agent", label="fail")["total"] == 1
+    assert assessment_for(store.get_run("live"), "old-judge") == old
+    store.enqueue("email", "mail", {"incident_id": "incident", "event": "opened"})
+    assert delivery_history()[0]["status"] == "queued"
+
+
 def test_concurrent_replicas_claim_each_job_once(database):
     for i in range(240):
         store.enqueue("evaluate", f"unit:{i}", {"run_id": str(i)})

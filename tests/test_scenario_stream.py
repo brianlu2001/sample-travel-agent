@@ -106,6 +106,7 @@ def test_sender_receipt_only_after_actual_smtp_acceptance(monkeypatch):
         monkeypatch.delenv("QUALITY_SMTP_USERNAME", raising=False)
         store.execute("INSERT INTO incidents(id,fingerprint,status,created,updated,payload) VALUES(?,?,?,?,?,?)",
                       ("smtp-test", "smtp-test", "open", time.time(), time.time(), json.dumps({"metric": "correctness", "source": "isolated_test"})))
+        store.enqueue("email", "isolated-smtp-test", {"incident_id": "smtp-test", "event": "opened"})
         mailbox.send_alert({"incident_id": "smtp-test", "event": "opened"}, "isolated-smtp-test")
         rows = store.rows("SELECT * FROM emails")
         receipts = store.rows("SELECT * FROM email_receipts")
@@ -113,6 +114,12 @@ def test_sender_receipt_only_after_actual_smtp_acceptance(monkeypatch):
         assert rows[0]["id"] == receipts[0]["id"]
         assert receipts[0]["smtp_code"] == 250
         assert receipts[0]["smtp_response"] == "Message accepted for local delivery"
+        from quality.email_history import delivery_history
+        activity = delivery_history()[0]
+        assert activity["incident_id"] == "smtp-test"
+        assert activity["status"] == "sent"
+        assert activity["body"] == rows[0]["body"]
+        assert activity["smtp_code"] == 250
     finally:
         controller.stop()
     with pytest.raises(OSError):

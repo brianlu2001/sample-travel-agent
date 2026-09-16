@@ -10,7 +10,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -118,7 +118,13 @@ def chat(req: ChatRequest):
 
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
-    return FileResponse(Path(__file__).parent / "static" / "dashboard.html")
+    # Content-address assets so a redeploy cannot combine fresh HTML with cached JS.
+    directory = Path(__file__).parent / "static"
+    html = (directory / "dashboard.html").read_text(encoding="utf-8")
+    for name in ("dashboard.css", "dashboard.js", "dashboard-trace.js"):
+        version = hashlib.sha256((directory / name).read_bytes()).hexdigest()[:16]
+        html = html.replace(f'/static/{name}"', f'/static/{name}?v={version}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/quality/state", include_in_schema=False)
@@ -201,10 +207,13 @@ def stop_scenarios():
 
 
 @app.get("/quality/runs/{run_id}", include_in_schema=False)
-def run_detail(run_id: str):
+def run_detail(run_id: str, evaluation_version: str | None = None):
     row = store.get_run(run_id)
     if row is None:
         raise HTTPException(404, "Run not found")
+    if evaluation_version:
+        from quality.live_history import assessment_for
+        row["evaluation"] = assessment_for(row, evaluation_version)
     from quality.trace_view import trace_details
     row["trace"] = trace_details(row["event"]["trace_id"])
     return row
@@ -216,10 +225,11 @@ def history(source: Literal["online", "live", "scenario", "benchmark", "validati
             metric: Literal["correctness", "groundedness", "topic_relevance", "task_completion"] | None = None,
             label: Literal["pass", "fail", "not_applicable", "unknown", "pending"] | None = None,
             evaluator: Literal["all", "current"] = "all", conversation_id: str | None = None,
+            agent_version: str | None = None, evaluation_version: str | None = None,
             limit: int = Query(default=20, ge=1, le=100)):
     from quality.dashboard import run_history
     try:
-        return run_history(source, benchmark_id, cursor, limit, metric, label, evaluator, conversation_id)
+        return run_history(source, benchmark_id, cursor, limit, metric, label, evaluator, conversation_id, agent_version, evaluation_version)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
 

@@ -71,6 +71,8 @@ def state():
     from quality.versions import recent_updates
     from quality.full_evaluation import status as full_evaluation_status
     from quality.checkpoints import state as checkpoint_state
+    from quality.email_history import delivery_history
+    from quality.live_history import performance_history
     return {"benchmarks": benchmarks, "live": summarize(live), "live_series": series(list(reversed(live))), "runs": runs,
             "provider_block": store.setting("provider_block"),
             "full_evaluation": full_evaluation_status(),
@@ -78,6 +80,8 @@ def state():
             "incidents": incidents, "repairs": repairs, "jobs": jobs,
             "repair_requests": repair_requests,
             "emails": emails,
+            "email_events": delivery_history(),
+            "live_history": performance_history(serving_agent["version"], active_evaluator),
             "phoenix_url": PHOENIX, "baseline_id": store.setting("baseline_id"),
             "auto_repair": store.setting("auto_repair", False),
             "live_status": live_status,
@@ -93,7 +97,7 @@ def state():
 
 
 def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
-                metric=None, label=None, evaluator="all", conversation_id=None):
+                metric=None, label=None, evaluator="all", conversation_id=None, agent_version=None, evaluation_version=None):
     """Stable pagination over recorded executions; never limited to the live window."""
     if source not in ("online", "live", "scenario", "benchmark", "validation", "all") or not 1 <= limit <= 100:
         raise ValueError("Invalid history filter")
@@ -114,6 +118,22 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
     if conversation_id:
         clauses.append("COALESCE(json_extract(event,'$.conversation_id'),id)=?")
         args.append(conversation_id)
+    if agent_version:
+        clauses.append("version=?")
+        args.append(agent_version)
+    # Resolve the selected historical judge before filtering labels or pagination.
+    # Current/pending assessments remain visible without inventing a historical judgment.
+    relation = "runs"
+    relation_args = []
+    if evaluation_version:
+        relation = """(SELECT r.id,r.created,r.source,r.version,r.benchmark_id,r.scenario_id,r.event,r.evaluated,
+            CASE WHEN json_extract(r.evaluation,'$.version')=? THEN r.evaluation
+                 ELSE (SELECT h.result FROM evaluation_history h WHERE h.run_id=r.id AND h.version=?
+                       ORDER BY h.started DESC LIMIT 1) END evaluation
+            FROM runs r) selected_runs"""
+        relation_args = [evaluation_version, evaluation_version]
+        clauses.append("(evaluation IS NOT NULL OR ?=?)")
+        args.extend((evaluation_version, active))
     if evaluator == "current":
         clauses.append("(evaluation IS NULL OR json_extract(evaluation,'$.version')=?)")
         args.append(active)
@@ -128,7 +148,7 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
         clauses.append("json_extract(evaluation,?) IS NOT NULL")
         args.append(f"$.metrics.{metric}")
     scope = " AND ".join(clauses) or "1=1"
-    total = store.rows("SELECT COUNT(*) n FROM runs WHERE " + scope, args)[0]["n"]
+    total = store.rows("SELECT COUNT(*) n FROM " + relation + " WHERE " + scope, [*relation_args, *args])[0]["n"]
     if cursor:
         try:
             before, identifier = json.loads(base64.urlsafe_b64decode(cursor).decode("utf-8"))
@@ -139,7 +159,7 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
         clauses.append("(created<? OR (created=? AND id<?))")
         args.extend((before, before, identifier))
     where = " AND ".join(clauses) or "1=1"
-    rows = store.rows("SELECT * FROM runs WHERE " + where + " ORDER BY created DESC,id DESC LIMIT ?", (*args, limit+1))
+    rows = store.rows("SELECT * FROM " + relation + " WHERE " + where + " ORDER BY created DESC,id DESC LIMIT ?", (*relation_args, *args, limit+1))
     items = []
     for row in rows[:limit]:
         event = json.loads(row["event"])
@@ -153,6 +173,7 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
                       "status": event.get("status"), "trace_id": event.get("trace_id"),
                       "tool_count": len(event.get("tools", [])),
                       "metrics": evaluation.get("metrics") if evaluation else None,
+                      "evaluator_version": evaluation.get("version") if evaluation else None,
                       "requires_revalidation": bool(evaluation and evaluation.get("version") != active)})
     next_cursor = None
     if len(rows) > limit:

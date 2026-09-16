@@ -39,7 +39,7 @@ Services run in the background on loopback. On Linux/macOS use the corresponding
 
 Use the chat UI normally. Each completed turn produces a real OpenInference trace;
 Phoenix evaluators assess its final answer asynchronously. The dashboard and
-monitor read scores from **Phoenix span annotations**. The dashboard refreshes every
+monitor read current warning scores from **Phoenix span annotations**. The dashboard refreshes every
 five seconds; monitoring runs on acknowledged evaluation events, without a quality-poll timer.
 Workers prioritize live judgments over queued offline benchmark evaluations.
 
@@ -50,6 +50,24 @@ local SMTP inbox. Recovery requires **95%**. Unknown/pending/not-applicable resu
 never count as passes. Only conversations submitted through the chat API enter this
 window; offline benchmarks are excluded. Operator-generated test messages sent to
 that same API also exercise the live pipeline.
+
+The **Live** tab defaults to recorded performance, preserving the last 20 conversations
+for each agent/evaluator version without a 24-hour display cutoff. **Performance view**
+selects a saved version or the current warning window; **Performance by version** compares
+previous versions and links to their traces. Previous evaluator judgments remain inspectable.
+Historical scores are labeled as recorded evidence; they do not trigger fresh alerts.
+All live turns remain in trace history, including turns outside the 20-conversation summary.
+
+**PRs & escalations → Email delivery** shows actual queued, sending, retrying, failed,
+received and SMTP-accepted events. Each escalation also links directly to its email receipt.
+“Email sent” requires a successful SMTP receipt; the local demo inbox is explicitly labeled
+and does not prove delivery to an external mailbox.
+
+Live history, judgments and email evidence live in the durable quality journal, outside Git.
+Local restarts and Git commits/merges retain `.quality/quality.sqlite3` and `.quality/phoenix/`.
+For replacement checkouts, keep `QUALITY_STATE_DIR` pointing at the same persistent directory;
+back it up along with Phoenix storage. Kubernetes uses the configured external PostgreSQL
+journal and persistent artifact storage; changing images must retain those services/volumes.
 
 ### 2. A live flag starts the repair workflow
 
