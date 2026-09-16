@@ -39,11 +39,6 @@ def state():
         live_status = "connected"
     except Exception:
         live, live_status = [], "Phoenix unavailable; live scores withheld"
-    try:
-        scenario = current_window("scenario", serving_agent["version"], evaluation_version=active_evaluator)
-        scenario_status = "connected"
-    except Exception:
-        scenario, scenario_status = [], "Phoenix unavailable; scenario scores withheld"
     runs = []
     for row in latest:
         event = json.loads(row["event"])
@@ -74,8 +69,6 @@ def state():
     from quality.full_evaluation import status as full_evaluation_status
     from quality.checkpoints import state as checkpoint_state
     return {"benchmarks": benchmarks, "live": summarize(live), "live_series": series(list(reversed(live))), "runs": runs,
-            "scenario": summarize(scenario), "scenario_series": series(list(reversed(scenario))),
-            "scenario_status": scenario_status, "scenario_campaign": store.setting("scenario_campaign"),
             "provider_block": store.setting("provider_block"),
             "full_evaluation": full_evaluation_status(),
             "checkpoints": checkpoint_state(),

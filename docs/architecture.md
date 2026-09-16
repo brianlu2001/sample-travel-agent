@@ -2,13 +2,12 @@
 
 ```mermaid
 flowchart LR
-    U[User chat] --> A
-    S[Automated development scenarios] --> A
+    U[Chat UI or POST /chat] --> A
     A[Chat agent + OpenInference] -->|Redact real traces| P[Phoenix OSS]
     A -->|Same redacted traces| X[Arize AX]
     P --> W[One feedback worker]
     W -->|Evaluate each real turn| P
-    P -->|Separate user/scenario windows + annotations| W
+    P -->|Live conversation window + annotations| W
     W -->|Below threshold| F[Email + repair investigation]
     F --> E[Invariants + targeted Phoenix experiment]
     E -->|Hard checks pass| R[Draft PR]
@@ -38,12 +37,12 @@ flowchart LR
    provides detailed trace/experiment inspection. The local SMTP inbox demonstrates
    actual email delivery without requiring a real development-team mailbox.
 
-The automated scenario stream is one lane of the existing worker. It uses real
-agent/model/tool calls on synthetic development inputs and tags them `scenario`.
-Phoenix keeps this traffic separate from `live` user chats and `benchmark`
-validation. Both online sources use the same monitoring rules. The runner pauses
-requests on an incident, follows the before/after workflow, and stops at a new PR
-or a terminal rejection/failure. This adds no service or orchestration platform.
+The demonstration uses the ordinary chat UI or `POST /chat`. Operator-generated
+messages go through this same endpoint and appear in **Live**, with actual agent
+responses, tool calls, traces and judgments. Offline `benchmark` validation remains
+separate. Earlier development-stream records retain their `scenario` provenance
+in history as **Archived simulation**; they are not relabeled or included in Live.
+The dashboard has two metric views: **Live** and **Benchmarks**.
 
 Email evidence consists of the SMTP server's recorded acceptance response and its
 matching Message-ID in the local inbox. The UI reports local receipt explicitly;

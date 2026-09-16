@@ -45,7 +45,9 @@ The live window holds the latest **20 conversations within 24 hours**, separated
 agent and evaluator version. After **10 applicable judgments** for any of the three primary
 metrics, a rate **below 85%** opens a deduplicated incident and sends email to the
 local SMTP inbox. Recovery requires **95%**. Unknown/pending/not-applicable results
-never count as passes. No sample requests are injected into this window.
+never count as passes. Only conversations submitted through the chat API enter this
+window; offline benchmarks are excluded. Operator-generated test messages sent to
+that same API also exercise the live pipeline.
 
 ### 2. A live flag starts the repair workflow
 
@@ -73,9 +75,9 @@ or credentials. GitHub credentials use the existing credential helper or
 
 ### 3. Inspect and calibrate
 
-The dashboard opens on **Live chat**. Inspect a request for its final answer,
-judgments, preserved prior judgments and separate tool diagnostics. Offline
-experiments are collapsed below the live workflow. Human labels calibrate judges;
+The dashboard opens on **Live**, with **Benchmarks** as the other metric view.
+Trace history defaults to live conversations. Inspect a request for its final answer,
+judgments, preserved prior judgments and separate tool diagnostics. Human labels calibrate judges;
 they do not silently rewrite benchmark results.
 
 **Inspect → Trace call tree** reads the real Phoenix spans. Expand an agent, LLM,
@@ -98,37 +100,28 @@ Older receipts remain visible without inventing missing sender responses.
 Configure `QUALITY_SMTP_*` for an external relay; relay acceptance alone is not
 proof of final external inbox delivery.
 
-### Automated scenario stream
+### Exercise the live dashboard
 
 ```powershell
-.\.venv\Scripts\python.exe -m quality.scenario_stream start
-.\.venv\Scripts\python.exe -m quality.scenario_stream status
-.\.venv\Scripts\python.exe -m quality.scenario_stream stop
+$conversationId = [guid]::NewGuid().ToString()
+$body = @{
+    conversation_id = $conversationId
+    message = 'Compare New York to Los Angeles flights for October 3, 2026. Include flight numbers and prices.'
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/chat -ContentType application/json -Body $body
 ```
 
-The existing worker cycles through the 45 development scenarios across all seven
-categories. It executes real conversations and waits for their real Phoenix
-annotations before starting the next scenario, with a 15-second minimum pause.
-The dashboard's **Automated scenarios** scope has its own 20-turn rolling window,
-with the same 10-applicable-result minimum and 85% threshold as user chats.
-No benchmark traffic contributes to either online denominator.
+Use the chat UI or `POST /chat` for demonstrations. Reuse the conversation ID for
+follow-up messages; create a new UUID for each new conversation. Each request runs
+the actual agent, tools, tracing, evaluation and rolling-window monitoring pipeline.
+Wait for evaluations to finish when checking metrics. Include factual lookup
+questions to exercise groundedness; responses without checkable claims can be
+not applicable and do not satisfy its 10-sample minimum.
 
-A qualifying incident pauses scenario requests while the existing workflow measures
-a current baseline, proposes a candidate, and validates it in Phoenix. One distinct
-revision is permitted after an initial rejection. The campaign stops at a new draft
-PR, rejection of that revision, an operational failure, or exhaustion of the 45
-development scenarios. It never repeats candidate evaluations merely to obtain a
-pass. The dashboard stop button prevents further scenario requests; an already
-started repair continues through validation. Held-out scenarios are never used as
-scenario-stream inputs or supplied to the repair agent.
-
-For a finite simulation with new user conversations, the same campaign runner also
-accepts `start(cases, stop_on_incident=False)` from `quality.scenario_stream`, where
-each case has a unique `id` and a `messages` list. It runs real agent calls under
-the `scenario` source and waits for Phoenix evaluation before the next conversation.
-This explicit mode finishes the supplied list while genuine incident/repair jobs
-run independently. The default development campaign still pauses on an incident.
-The previous campaign record is archived before a new campaign starts.
+There is no separate demo-scenario dashboard view. Earlier development-stream
+records retain their original provenance and remain accessible through **All
+executions** in trace history, labeled **Archived simulation**. They are not
+retroactively counted as live chats. Reference benchmark traffic also stays separate.
 
 ### Hosted tracing
 

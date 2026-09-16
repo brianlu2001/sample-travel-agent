@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 const names={correctness:'Correctness',groundedness:'Groundedness',topic_relevance:'Topic relevance',task_completion:'Task completion'};
 const primary=['correctness','groundedness','topic_relevance'];
+const sourceName=source=>source==='scenario'?'Archived simulation':source==='live'?'Live':source;
 const labels={merged:'Merged',pr_open:'Draft PR',pr_closed:'PR closed',awaiting_repair:'Validating fix',not_applicable:'N/A'};
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
 const badge=(text,kind=text)=>el('span',labels[text]||text.replaceAll('_',' '),'badge '+kind);
@@ -46,7 +47,7 @@ function renderMetrics(){
  const checkpoint=s.checkpoints?.decisions.find(d=>d.benchmark_id===b?.id);$('#checkpoint-review').hidden=!checkpoint;$('#checkpoint-review').onclick=()=>showCheckpoint(checkpoint);
  const report=offline?(b?.report||b?.current):s[scope];
  const base=b?.parent_id&&b?.manifest.suite!=='targeted'?s.benchmarks.find(x=>x.id===b.parent_id):null;
- $('#scope-note').textContent=offline?(b?`${b.kind==='baseline'?'Saved baseline':b.kind==='checkpoint'?'Full checkpoint':'Candidate validation'} · ${b.progress.evaluated||0}/${b.progress.total} responses evaluated · ${b.requires_revalidation?'Historical scores from a previous evaluator; revalidation required.':b.status==='complete'?`${b.report.total} final scenario outcomes; sealed experiment.`: 'Results are provisional until the experiment completes.'}`:'No benchmark recorded yet.'):`${report?.total||0} of ${s.monitor.window} conversations · Latest response per conversation within 24 hours${scope==='scenario'?' · Current demo campaign; real responses to synthetic inputs.':'.'}${s[scope+'_status']!=='connected'?' '+s[scope+'_status']:''}`;
+ $('#scope-note').textContent=offline?(b?`${b.kind==='baseline'?'Saved baseline':b.kind==='checkpoint'?'Full checkpoint':'Candidate validation'} · ${b.progress.evaluated||0}/${b.progress.total} responses evaluated · ${b.requires_revalidation?'Historical scores from a previous evaluator; revalidation required.':b.status==='complete'?`${b.report.total} final scenario outcomes; sealed experiment.`: 'Results are provisional until the experiment completes.'}`:'No benchmark recorded yet.'):`${report?.total||0} of ${s.monitor.window} conversations · Latest response per conversation within 24 hours.${s.live_status!=='connected'?' '+s.live_status:''}`;
  const n=$('#metrics');n.replaceChildren();
  Object.entries(names).filter(([key])=>primary.includes(key)).forEach(([key,title])=>{const m=report?.metrics?.[key],warm=!offline&&(!m||m.n<s.monitor.minimum_samples),warn=!warm&&m?.pass_rate!=null&&m.pass_rate<s.monitor.threshold;
  const c=el('article',undefined,'card'),head=el('div',undefined,'card-title');head.append(el('span',title),badge(offline?(b?.requires_revalidation?'historical':b?.status||'pending'):warm?'warming up':warn?'below '+Math.round(s.monitor.threshold*100)+'%':'healthy',warn?'fail':warm?'pending':'pass'));c.append(head,el('div',pct(m?.pass_rate),'value'+(warn?' warn':'')));
@@ -56,20 +57,20 @@ function renderMetrics(){
  const bm=(base?.report||base?.current)?.metrics?.[key];if(b?.status==='complete'&&base?.status==='complete'&&bm&&m?.pass_rate!=null&&bm.pass_rate!=null){const delta=(m.pass_rate-bm.pass_rate)*100;c.append(el('div',`Baseline ${pct(bm.pass_rate)} → ${delta>=0?'+':''}${delta.toFixed(1)} pp`,'small'))}
  c.append(action('Inspect failures',()=>filterHistory({source:offline?'all':scope,metric:key,label:'fail',benchmark:b?.id})));n.append(c)});
  $('#policy').textContent=`${s.monitor.window} conversations · Warn below ${Math.round(s.monitor.threshold*100)}%`;
- $('#method-policy').textContent=`The three primary metrics use the latest ${s.monitor.window} distinct conversations within 24 hours, separated by agent, evaluator and traffic source. Each needs ${s.monitor.minimum_samples} applicable results. Below ${pct(s.monitor.threshold)} triggers a warning and validated fix proposal. Recovery is ${pct(s.monitor.recovery_threshold)}. Every response is evaluated, but the rolling score uses the latest response per conversation. Earlier turns remain in trace history. Completion is a diagnostic and does not trigger new alerts or checkpoint regressions. Demo scenarios start a fresh window for each campaign.`;
+ $('#method-policy').textContent=`The three primary metrics use the latest ${s.monitor.window} distinct live conversations within 24 hours, separated by agent and evaluator version. Each needs ${s.monitor.minimum_samples} applicable results. Below ${pct(s.monitor.threshold)} triggers a warning and validated fix proposal. Recovery is ${pct(s.monitor.recovery_threshold)}. Every response is evaluated, but the rolling score uses the latest response per conversation. Earlier turns remain in trace history. Completion is a diagnostic and does not trigger new alerts or checkpoint regressions. Benchmarks remain separate from live traffic.`;
 }
 function renderActivity(){
- const s=snapshot,c=s.scenario_campaign;
- const incident=c?s.incidents.find(i=>i.created>=c.created&&i.payload.source==='scenario'):null;
+ const s=snapshot;
+ const incident=s.incidents.find(i=>i.status==='open'&&i.payload.source==='live'&&i.payload.version===s.serving_agent.version&&i.payload.evaluator_version===s.evaluator_version);
  const baseline=s.benchmarks.find(b=>b.id===incident?.payload.validation_baseline_id);
  const repair=incident?s.repairs.find(r=>r.incident_id===incident.id):null;
  const currentExperiment=s.benchmarks.find(b=>b.id===(repair?.payload.targeted_benchmark_id||repair?.payload.candidate_benchmark_id))||baseline;
- const progress=c?.status==='awaiting_repair'&&currentExperiment?` ${currentExperiment.kind==='baseline'?'Original baseline':'Candidate experiment'}: ${currentExperiment.progress.total} responses recorded, ${currentExperiment.progress.evaluated||0} evaluated (${currentExperiment.status}).`:'';
- $('#workflow').textContent=s.provider_block?s.provider_block.message:c?`Demo workflow: ${(labels[c.status]||c.status).replaceAll('_',' ')} · ${c.completed} conversations executed.${progress||' '+(repair?.status==='merged'?'The proposed PR was merged; scenario traffic is stopped.':c.note||'')}`:'Monitoring real conversations. A qualifying warning starts baseline measurement and a reviewed fix.';
+ const progress=currentExperiment?` ${currentExperiment.kind==='baseline'?'Current-agent baseline':'Candidate experiment'}: ${currentExperiment.progress.evaluated||0}/${currentExperiment.progress.total} responses evaluated (${currentExperiment.status}).`:'';
+ $('#workflow').textContent=s.provider_block?s.provider_block.message:incident?`Live escalation · ${names[incident.payload.metric]||incident.payload.metric}.${repair?' '+(labels[repair.status]||repair.status).replaceAll('_',' ')+'.':''}${progress}`:'Monitoring live conversations. A qualifying warning starts baseline measurement and a reviewed fix.';
  const filter=$('#activity-filter').value,all=[...s.incidents.map(x=>({...x,kind:'incident'})),...s.repairs.map(x=>({...x,kind:'repair'}))].filter(x=>filter==='all'||x.kind===filter).sort((a,b)=>b.created-a.created);
  const n=$('#activity');n.replaceChildren();if(!all.length)empty(n,'No escalations or proposed fixes yet.');all.slice(0,activityLimit).forEach(x=>{const row=el('div',undefined,'activity-row'),desc=el('div');
  const title=x.kind==='repair'?(x.payload.pr_url?'PR #'+x.payload.pr_url.split('/').pop()+' · Agent improvement':'Agent improvement · '+x.id.slice(0,8)):x.payload.source==='checkpoint'?`${names[x.payload.metric]||x.payload.metric} · Checkpoint regression`:`${names[x.payload.metric]||x.payload.metric} below ${pct(x.payload.threshold)}`;
- desc.append(el('div',title,'title'),el('div',`${x.kind==='repair'?'Proposed fix':x.payload.source+' conversation window'}${x.requires_revalidation?' · Previous evaluator':''}`,'small'));
+ desc.append(el('div',title,'title'),el('div',`${x.kind==='repair'?'Proposed fix':sourceName(x.payload.source)+' conversation window'}${x.requires_revalidation?' · Previous evaluator':''}`,'small'));
  row.append(badge(x.status),desc,el('time',dt(x.created),'small'),action('Details ↗',()=>showActivity(x)));n.append(row)});
  $('#more-activity').hidden=all.length<=activityLimit;
  $('#active-versions').textContent=`Running agent ${s.serving_agent.version.slice(0,12)} · Evaluator ${s.evaluator_version.slice(0,12)}. Candidate PRs do not change the running agent.`;
@@ -94,9 +95,9 @@ async function inspect(id){
  renderTrace(data.trace,n);rawDetails(n,'Conversation input',data.event.input);rawDetails(n,'Tool diagnostics & evaluation evidence',data.evaluation);rawDetails(n,'Previous evaluations (preserved)',data.evaluation_history||[]);
  }catch(e){if(selectedRun===id)n.replaceChildren(el('p',e.message,'error'))}
 }
-function filterHistory({source='online',metric='',label='',conversation=null,benchmark=null}={}){
+function filterHistory({source='live',metric='',label='',conversation=null,benchmark=null}={}){
  historyConversation=conversation;historyBenchmark=benchmark;historyCursor=null;historyStack=[];
- $('#trace-source').value=source;$('#trace-metric').value=metric;$('#trace-label').value=label;$('#trace-evaluator').value='all';
+ $('#trace-source').value=['live','benchmark','all'].includes(source)?source:'all';$('#trace-metric').value=metric;$('#trace-label').value=label;$('#trace-evaluator').value='all';
  if($('#detail').open)$('#detail').close();loadHistory();$('#trace-section').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function resetHistoryPage(){historyCursor=null;historyStack=[];loadHistory()}
@@ -109,13 +110,13 @@ async function loadHistory(){
  try{
   const h=await get('/quality/runs?'+q);if(seq!==historySequence)return;nextCursor=h.next_cursor;const n=$('#traces');n.replaceChildren();
   h.items.forEach(x=>{
-   const row=el('tr'),question=el('td');question.append(el('div',x.question,'question'),el('div',x.trace_id+' · Agent '+x.version.slice(0,8),'trace-id'),el('div',`${x.source==='scenario'?'Demo scenario':x.source} · ${dt(x.created)}`,'small compact-only'));
+   const row=el('tr'),question=el('td');question.append(el('div',x.question,'question'),el('div',x.trace_id+' · Agent '+x.version.slice(0,8),'trace-id'),el('div',`${sourceName(x.source)} · ${dt(x.created)}`,'small compact-only'));
    const qualityCell=el('td');qualityCell.className='trace-quality';
    const selected=$('#trace-metric').value,keys=selected&&!primary.includes(selected)?[...primary,selected]:primary;
    if(x.requires_revalidation)qualityCell.append(el('div','Previous evaluator','small'));
    keys.forEach(key=>{const label=x.metrics?.[key]?.label||'pending';qualityCell.append(badge(names[key]+': '+(labels[label]||label.replaceAll('_',' ')),label))});
    const detail=el('td');detail.append(action('Inspect ↗',()=>inspect(x.id)),action('Conversation',()=>filterHistory({source:x.source,conversation:x.conversation_id})));
-   row.append(question,el('td',x.source==='scenario'?'Demo scenario':x.source),qualityCell,el('td',String(x.tool_count)),el('td',dt(x.created),'small'),detail);n.append(row);
+   row.append(question,el('td',sourceName(x.source)),qualityCell,el('td',String(x.tool_count)),el('td',dt(x.created),'small'),detail);n.append(row);
   });
   if(!h.items.length){const row=el('tr'),cell=el('td','No recorded responses match these filters.','empty');cell.colSpan=6;row.append(cell);n.append(row)}
   $('#trace-count').textContent=`${h.total} matching responses · Page ${historyStack.length+1}`;$('#older').disabled=!nextCursor;$('#newer').disabled=!historyStack.length;
