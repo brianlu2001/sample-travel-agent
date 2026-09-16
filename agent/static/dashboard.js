@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 const names={correctness:'Correctness',groundedness:'Groundedness',topic_relevance:'Topic relevance',task_completion:'Task completion'};
-const labels={pr_open:'Draft PR',pr_closed:'PR closed',awaiting_repair:'Validating fix',not_applicable:'N/A'};
+const primary=['correctness','groundedness','topic_relevance'];
+const labels={merged:'Merged',pr_open:'Draft PR',pr_closed:'PR closed',awaiting_repair:'Validating fix',not_applicable:'N/A'};
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
 const badge=(text,kind=text)=>el('span',labels[text]||text.replaceAll('_',' '),'badge '+kind);
 const pct=x=>x==null?'—':(x*100).toFixed(1)+'%';
@@ -8,6 +9,7 @@ const dt=x=>x?new Date(x*1000).toLocaleString([],{month:'short',day:'numeric',ho
 const empty=(n,text)=>n.append(el('div',text,'empty'));
 const link=(label,url)=>{const a=el('a',label);if(/^https?:\/\//.test(url||'')){a.href=url;a.target='_blank';a.rel='noopener'}return a};
 const action=(label,fn)=>{const b=el('button',label);b.onclick=fn;return b};
+let historyConversation=null,historyBenchmark=null;
 let snapshot,scope='live',activityLimit=6,selectedRun,historyCursor=null,historyStack=[],nextCursor=null,historySequence=0,refreshing=false,evaluationSubmitting=false,evaluationRequest=null,evaluationError='';
 async function get(url){const r=await fetch(url);if(!r.ok)throw Error('Could not load data ('+r.status+')');return r.json()}
 function benchmarkOptions(){const n=$('#benchmark'),old=n.value,items=[...snapshot.benchmarks].reverse();const key=items.map(b=>b.id+':'+b.status).join();if(n.dataset.key===key)return;n.dataset.key=key;n.replaceChildren();items.forEach(b=>n.add(new Option(`${b.kind} · ${(b.saved_version?.version||b.current_version).slice(0,8)} · ${dt(b.created)} · ${b.status}${b.requires_revalidation?' · old evaluator':''}`,b.id)));if(items.some(b=>b.id===old))n.value=old;else n.value=(items.find(b=>!b.requires_revalidation)||items.find(b=>b.status==='complete')||items[0])?.id||''}
@@ -46,15 +48,15 @@ function renderMetrics(){
  const base=b?.parent_id&&b?.manifest.suite!=='targeted'?s.benchmarks.find(x=>x.id===b.parent_id):null;
  $('#scope-note').textContent=offline?(b?`${b.kind==='baseline'?'Saved baseline':b.kind==='checkpoint'?'Full checkpoint':'Candidate validation'} · ${b.progress.evaluated||0}/${b.progress.total} responses evaluated · ${b.requires_revalidation?'Historical scores from a previous evaluator; revalidation required.':b.status==='complete'?`${b.report.total} final scenario outcomes; sealed experiment.`: 'Results are provisional until the experiment completes.'}`:'No benchmark recorded yet.'):`${report?.total||0} of ${s.monitor.window} conversations · Latest response per conversation within 24 hours${scope==='scenario'?' · Current demo campaign; real responses to synthetic inputs.':'.'}${s[scope+'_status']!=='connected'?' '+s[scope+'_status']:''}`;
  const n=$('#metrics');n.replaceChildren();
- Object.entries(names).forEach(([key,title])=>{const m=report?.metrics?.[key],warm=!offline&&(!m||m.n<s.monitor.minimum_samples),warn=!warm&&m?.pass_rate!=null&&m.pass_rate<s.monitor.threshold;
+ Object.entries(names).filter(([key])=>primary.includes(key)).forEach(([key,title])=>{const m=report?.metrics?.[key],warm=!offline&&(!m||m.n<s.monitor.minimum_samples),warn=!warm&&m?.pass_rate!=null&&m.pass_rate<s.monitor.threshold;
  const c=el('article',undefined,'card'),head=el('div',undefined,'card-title');head.append(el('span',title),badge(offline?(b?.requires_revalidation?'historical':b?.status||'pending'):warm?'warming up':warn?'below '+Math.round(s.monitor.threshold*100)+'%':'healthy',warn?'fail':warm?'pending':'pass'));c.append(head,el('div',pct(m?.pass_rate),'value'+(warn?' warn':'')));
  c.append(el('div',m?`${m.pass} pass / ${m.n} applicable`:'No evaluations yet','small'));const bar=el('div',undefined,'bar'+(warn?' warn':'')),fill=el('span');fill.style.width=((m?.pass_rate||0)*100)+'%';bar.append(fill);c.append(bar);
  c.append(el('div',`${m?.pending||0} pending · ${m?.unknown||0} unknown · ${m?.not_applicable||0} N/A`,'small'));
  if(warm)c.append(el('div',`Needs ${s.monitor.minimum_samples} applicable results to warn`,'small'));
  const bm=(base?.report||base?.current)?.metrics?.[key];if(b?.status==='complete'&&base?.status==='complete'&&bm&&m?.pass_rate!=null&&bm.pass_rate!=null){const delta=(m.pass_rate-bm.pass_rate)*100;c.append(el('div',`Baseline ${pct(bm.pass_rate)} → ${delta>=0?'+':''}${delta.toFixed(1)} pp`,'small'))}
- n.append(c)});
+ c.append(action('Inspect failures',()=>filterHistory({source:offline?'all':scope,metric:key,label:'fail',benchmark:b?.id})));n.append(c)});
  $('#policy').textContent=`${s.monitor.window} conversations · Warn below ${Math.round(s.monitor.threshold*100)}%`;
- $('#method-policy').textContent=`All four metrics use the latest ${s.monitor.window} distinct conversations within 24 hours, separated by agent, evaluator and traffic source. Each needs ${s.monitor.minimum_samples} applicable results. Below ${pct(s.monitor.threshold)} triggers a warning and validated fix proposal. Recovery is ${pct(s.monitor.recovery_threshold)}. Demo scenarios start a fresh window for each campaign.`;
+ $('#method-policy').textContent=`The three primary metrics use the latest ${s.monitor.window} distinct conversations within 24 hours, separated by agent, evaluator and traffic source. Each needs ${s.monitor.minimum_samples} applicable results. Below ${pct(s.monitor.threshold)} triggers a warning and validated fix proposal. Recovery is ${pct(s.monitor.recovery_threshold)}. Every response is evaluated, but the rolling score uses the latest response per conversation. Earlier turns remain in trace history. Completion is a diagnostic and does not trigger new alerts or checkpoint regressions. Demo scenarios start a fresh window for each campaign.`;
 }
 function renderActivity(){
  const s=snapshot,c=s.scenario_campaign;
@@ -63,7 +65,7 @@ function renderActivity(){
  const repair=incident?s.repairs.find(r=>r.incident_id===incident.id):null;
  const currentExperiment=s.benchmarks.find(b=>b.id===(repair?.payload.targeted_benchmark_id||repair?.payload.candidate_benchmark_id))||baseline;
  const progress=c?.status==='awaiting_repair'&&currentExperiment?` ${currentExperiment.kind==='baseline'?'Original baseline':'Candidate experiment'}: ${currentExperiment.progress.total} responses recorded, ${currentExperiment.progress.evaluated||0} evaluated (${currentExperiment.status}).`:'';
- $('#workflow').textContent=s.provider_block?s.provider_block.message:c?`Demo workflow: ${(labels[c.status]||c.status).replaceAll('_',' ')} · ${c.completed} conversations executed.${progress||' '+(c.note||'')}`:'Monitoring real conversations. A qualifying warning starts baseline measurement and a reviewed fix.';
+ $('#workflow').textContent=s.provider_block?s.provider_block.message:c?`Demo workflow: ${(labels[c.status]||c.status).replaceAll('_',' ')} · ${c.completed} conversations executed.${progress||' '+(repair?.status==='merged'?'The proposed PR was merged; scenario traffic is stopped.':c.note||'')}`:'Monitoring real conversations. A qualifying warning starts baseline measurement and a reviewed fix.';
  const filter=$('#activity-filter').value,all=[...s.incidents.map(x=>({...x,kind:'incident'})),...s.repairs.map(x=>({...x,kind:'repair'}))].filter(x=>filter==='all'||x.kind===filter).sort((a,b)=>b.created-a.created);
  const n=$('#activity');n.replaceChildren();if(!all.length)empty(n,'No escalations or proposed fixes yet.');all.slice(0,activityLimit).forEach(x=>{const row=el('div',undefined,'activity-row'),desc=el('div');
  const title=x.kind==='repair'?(x.payload.pr_url?'PR #'+x.payload.pr_url.split('/').pop()+' · Agent improvement':'Agent improvement · '+x.id.slice(0,8)):x.payload.source==='checkpoint'?`${names[x.payload.metric]||x.payload.metric} · Checkpoint regression`:`${names[x.payload.metric]||x.payload.metric} below ${pct(x.payload.threshold)}`;
@@ -77,7 +79,7 @@ function openDetail(title,review=false){selectedRun=null;$('#detail-title').text
 function rawDetails(n,title,value){const d=el('details');d.append(el('summary',title),el('pre',JSON.stringify(value,null,2)));n.append(d)}
 function showActivity(x){
  const n=openDetail(x.kind==='repair'?'Proposed fix':'Escalation'),p=x.payload;n.append(badge(x.status),el('p',dt(x.created),'small'),el('p',p.summary||p.description||''));if(x.requires_revalidation)n.append(el('p','Historical evidence from a previous evaluator. It does not establish current performance.','error'));
- if(p.pr_url)n.append(link(x.status==='pr_closed'?'View closed PR ↗':'Review draft PR ↗',p.pr_url));if(p.closed_reason)n.append(el('p',p.closed_reason));
+ if(p.pr_url)n.append(link(x.status==='merged'?'View merged PR ↗':x.status==='pr_closed'?'View closed PR ↗':'Review draft PR ↗',p.pr_url));if(p.closed_reason)n.append(el('p',p.closed_reason));
  if(p.measurement)n.append(el('p',`${names[p.metric]}: ${pct(p.measurement.pass_rate)} (${p.measurement.pass}/${p.measurement.n} applicable), warning threshold ${pct(p.threshold)}.`));
  const incidentId=x.kind==='incident'?x.id:x.incident_id,incident=snapshot.incidents.find(i=>i.id===incidentId);
  const ids=(incident?.payload||p).failing_run_ids||[];if(ids.length){n.append(el('h3','Triggering evidence'));const box=el('div');ids.forEach((id,i)=>box.append(action('Failed response '+(i+1),()=>inspect(id))));n.append(box)}
@@ -88,17 +90,39 @@ function showActivity(x){
 async function inspect(id){
  const n=openDetail('Execution details',true);selectedRun=id;n.append(el('p','Loading execution and Phoenix trace…'));
  try{const data=await get('/quality/runs/'+encodeURIComponent(id));if(selectedRun!==id)return;n.replaceChildren(el('p','Trace '+data.event.trace_id,'small version-id'),el('p',`${dt(data.created)} · Agent ${data.event.version.slice(0,12)} · ${data.source}`,'small'));
- n.append(el('h3','Final answer'),el('pre',data.event.output));const scores=el('div');Object.entries(names).forEach(([key,title])=>{const m=data.evaluation?.metrics?.[key],d=el('details'),summary=el('summary',title+' · ');summary.append(badge(m?.label||'pending'));d.append(summary,el('p',m?.explanation||'Evaluation pending.'));scores.append(d)});n.append(el('h3','Evaluations'),scores);if(data.evaluation?.version!==snapshot.evaluator_version)n.append(el('p','Evaluation is pending or uses a previous evaluator.','small'));
+ n.append(action('View all conversation turns',()=>filterHistory({source:data.source,conversation:data.event.conversation_id||id})),el('h3','Response for this turn'),el('pre',data.event.output));const scores=el('div');Object.entries(names).forEach(([key,title])=>{const m=data.evaluation?.metrics?.[key],d=el('details'),summary=el('summary',title+(primary.includes(key)?'':' (diagnostic)')+' · ');summary.append(badge(m?.label||'pending'));d.append(summary,el('p',m?.explanation||'Evaluation pending.'));if(m?.annotator)d.append(el('p','Scored by '+m.annotator,'small'));scores.append(d)});n.append(el('h3','Evaluations'),scores);if(data.evaluation?.version!==snapshot.evaluator_version)n.append(el('p','Evaluation is pending or uses a previous evaluator.','small'));
  renderTrace(data.trace,n);rawDetails(n,'Conversation input',data.event.input);rawDetails(n,'Tool diagnostics & evaluation evidence',data.evaluation);rawDetails(n,'Previous evaluations (preserved)',data.evaluation_history||[]);
  }catch(e){if(selectedRun===id)n.replaceChildren(el('p',e.message,'error'))}
 }
+function filterHistory({source='online',metric='',label='',conversation=null,benchmark=null}={}){
+ historyConversation=conversation;historyBenchmark=benchmark;historyCursor=null;historyStack=[];
+ $('#trace-source').value=source;$('#trace-metric').value=metric;$('#trace-label').value=label;$('#trace-evaluator').value='all';
+ if($('#detail').open)$('#detail').close();loadHistory();$('#trace-section').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function resetHistoryPage(){historyCursor=null;historyStack=[];loadHistory()}
 async function loadHistory(){
- const seq=++historySequence,q=new URLSearchParams({source:$('#trace-source').value,limit:'12'});if(historyCursor)q.set('cursor',historyCursor);
- try{const h=await get('/quality/runs?'+q);if(seq!==historySequence)return;nextCursor=h.next_cursor;const n=$('#traces');n.replaceChildren();h.items.forEach(x=>{const row=el('tr'),q=el('td');q.append(el('div',x.question,'question'),el('div',x.trace_id,'trace-id'));const scores=Object.values(x.metrics||{}),fail=scores.filter(m=>m.label==='fail').length,unknown=scores.some(m=>m.label==='unknown');const quality=x.requires_revalidation?'old evaluator':scores.length<4?'pending':fail?fail+' failed':unknown?'unknown':'no failures';const qualityCell=el('td');qualityCell.append(badge(quality,fail?'fail':quality==='no failures'?'pass':'pending'));const detail=el('td');detail.append(action('Inspect ↗',()=>inspect(x.id)));row.append(q,el('td',x.source==='scenario'?'Demo scenario':x.source),qualityCell,el('td',String(x.tool_count)),el('td',dt(x.created),'small'),detail);n.append(row)});if(!h.items.length){const row=el('tr'),cell=el('td','No recorded responses for this source.','empty');cell.colSpan=6;row.append(cell);n.append(row)}$('#trace-count').textContent=`${h.total} recorded responses · Page ${historyStack.length+1}`;$('#older').disabled=!nextCursor;$('#newer').disabled=!historyStack.length;
+ const seq=++historySequence,q=new URLSearchParams({source:$('#trace-source').value,limit:'12',evaluator:$('#trace-evaluator').value});
+ for(const [param,id] of [['metric','trace-metric'],['label','trace-label']])if($('#'+id).value)q.set(param,$('#'+id).value);
+ if(historyCursor)q.set('cursor',historyCursor);if(historyConversation)q.set('conversation_id',historyConversation);if(historyBenchmark)q.set('benchmark_id',historyBenchmark);
+ $('#trace-context').textContent=historyConversation?'Conversation '+historyConversation:historyBenchmark?'Experiment '+historyBenchmark:'';
+ $('#clear-trace-context').hidden=!historyConversation&&!historyBenchmark;
+ try{
+  const h=await get('/quality/runs?'+q);if(seq!==historySequence)return;nextCursor=h.next_cursor;const n=$('#traces');n.replaceChildren();
+  h.items.forEach(x=>{
+   const row=el('tr'),question=el('td');question.append(el('div',x.question,'question'),el('div',x.trace_id+' · Agent '+x.version.slice(0,8),'trace-id'),el('div',`${x.source==='scenario'?'Demo scenario':x.source} · ${dt(x.created)}`,'small compact-only'));
+   const qualityCell=el('td');qualityCell.className='trace-quality';
+   const selected=$('#trace-metric').value,keys=selected&&!primary.includes(selected)?[...primary,selected]:primary;
+   if(x.requires_revalidation)qualityCell.append(el('div','Previous evaluator','small'));
+   keys.forEach(key=>{const label=x.metrics?.[key]?.label||'pending';qualityCell.append(badge(names[key]+': '+(labels[label]||label.replaceAll('_',' ')),label))});
+   const detail=el('td');detail.append(action('Inspect ↗',()=>inspect(x.id)),action('Conversation',()=>filterHistory({source:x.source,conversation:x.conversation_id})));
+   row.append(question,el('td',x.source==='scenario'?'Demo scenario':x.source),qualityCell,el('td',String(x.tool_count)),el('td',dt(x.created),'small'),detail);n.append(row);
+  });
+  if(!h.items.length){const row=el('tr'),cell=el('td','No recorded responses match these filters.','empty');cell.colSpan=6;row.append(cell);n.append(row)}
+  $('#trace-count').textContent=`${h.total} matching responses · Page ${historyStack.length+1}`;$('#older').disabled=!nextCursor;$('#newer').disabled=!historyStack.length;
  }catch(e){$('#trace-count').textContent=e.message}
 }
 async function refresh(){if(refreshing)return;refreshing=true;try{snapshot=await get('/quality/state');benchmarkOptions();renderMetrics();renderActivity();$('#connection').textContent='Updated '+new Date().toLocaleTimeString();$('#connection').className='';if(!historyCursor)await loadHistory()}catch(e){$('#connection').textContent=e.message;$('#connection').className='error'}finally{refreshing=false}}
-document.querySelectorAll('[data-scope]').forEach(n=>n.onclick=()=>{scope=n.dataset.scope;if(snapshot)renderMetrics()});$('#benchmark').onchange=renderMetrics;$('#activity-filter').onchange=()=>{activityLimit=6;renderActivity()};$('#more-activity').onclick=()=>{activityLimit+=10;renderActivity()};$('#trace-source').onchange=()=>{historyCursor=null;historyStack=[];loadHistory()};$('#older').onclick=()=>{historyStack.push(historyCursor);historyCursor=nextCursor;loadHistory()};$('#newer').onclick=()=>{historyCursor=historyStack.pop()||null;loadHistory()};$('#close').onclick=()=>{$('#detail').close();selectedRun=null};$('#detail').addEventListener('close',()=>selectedRun=null);
+document.querySelectorAll('[data-scope]').forEach(n=>n.onclick=()=>{scope=n.dataset.scope;if(snapshot)renderMetrics()});$('#benchmark').onchange=renderMetrics;$('#activity-filter').onchange=()=>{activityLimit=6;renderActivity()};$('#more-activity').onclick=()=>{activityLimit+=10;renderActivity()};['trace-source','trace-metric','trace-label','trace-evaluator'].forEach(id=>$('#'+id).onchange=resetHistoryPage);$('#clear-trace-context').onclick=()=>{historyConversation=null;historyBenchmark=null;resetHistoryPage()};$('#older').onclick=()=>{historyStack.push(historyCursor);historyCursor=nextCursor;loadHistory()};$('#newer').onclick=()=>{historyCursor=historyStack.pop()||null;loadHistory()};$('#close').onclick=()=>{$('#detail').close();selectedRun=null};$('#detail').addEventListener('close',()=>selectedRun=null);
 Object.entries(names).forEach(([key,title])=>{const l=el('label',title),s=el('select');s.name=key;['unknown','pass','fail','not_applicable'].forEach(x=>s.add(new Option(x.replaceAll('_',' '),x)));l.append(s);$('#review-labels').append(l)});
 $('#review').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/quality/runs/'+selectedRun+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#review-status').textContent=r.ok?' Saved.':' Could not save.'}catch{$('#review-status').textContent=' Could not save.'}};
 $('#full-evaluation').onclick=startFullEvaluation;

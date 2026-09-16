@@ -17,7 +17,7 @@ OpenInference supplies AI semantics/instrumentation; OTLP is its standard transp
 | Correctness | Wrong cities, directions, dates or durations create unusable trips and rework. |
 | Groundedness | Unsupported fares, availability and weather undermine trust and can cause bad purchasing decisions. |
 | Topic relevance | Keeps the travel assistant useful within its supported service and prevents unrelated task execution. |
-| Task completion proxy | Checks whether the user received a usable deliverable rather than only an accurate refusal or clarification. |
+| Completion diagnostic | Retained for historical continuity; no longer a primary metric or automated escalation trigger. |
 
 Use deterministic checks for explicit final-answer day coverage and tool contracts;
 use independent Phoenix LLM rubrics for semantic constraints. An internal tool

@@ -6,14 +6,14 @@ import uuid
 from quality import store
 from quality.benchmarks import configuration
 from quality.checkpoint_policy import POLICY, compare, version as policy_version
-from quality.config import fingerprint
+from quality.config import PRIMARY_METRICS, fingerprint
 from quality.evaluation import scenarios
 from quality.versions import baseline_for, measurement_context, saved_benchmarks
 
 
 def targets():
     return [{"id": r["id"], "updated": r["updated"], **json.loads(r["payload"])}
-            for r in store.rows("SELECT * FROM checkpoint_targets ORDER BY updated DESC")]
+            for r in store.rows("SELECT * FROM checkpoint_targets WHERE COALESCE(json_extract(payload,'$.retired'),0)=0 ORDER BY updated DESC")]
 
 
 def register(identifier, payload):
@@ -81,6 +81,8 @@ def verify_target(target):
     with httpx.Client(headers={"Authorization": "Bearer " + (credential() or "")}, timeout=20) as client:
         response = client.get(f"https://api.github.com/repos/{parts[0]}/{parts[1]}/pulls/{parts[3]}")
         response.raise_for_status()
+        if response.json().get("state", "open") != "open":
+            raise ValueError("PR is closed; evaluate the running agent after deployment")
         if response.json()["head"]["sha"] != target["head_sha"]:
             raise ValueError("PR head changed outside this measured candidate")
 
@@ -187,7 +189,7 @@ def record_result(benchmark_id, target=None):
         blockers.append("Privacy redaction failed during this experiment")
     if record["report"].get("tool_contract_failures", 0):
         blockers.append("Deterministic tool contract failures remain")
-    if any(m.get("unknown", 0) or m.get("pending", 0) for m in record["report"]["metrics"].values()):
+    if any(m.get("unknown", 0) or m.get("pending", 0) for name, m in record["report"]["metrics"].items() if name in PRIMARY_METRICS):
         blockers.append("Evaluation coverage is incomplete")
     conclusions = [value[cohort]["conclusion"] for value in comparisons.values() for cohort in ("overall", "held_out")]
     conclusion = "regressed" if blockers or "regressed" in conclusions else "improved" if conclusions and all(c == "improved" for c in conclusions) else "inconclusive"

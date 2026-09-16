@@ -181,10 +181,13 @@ def run_detail(run_id: str):
 @app.get("/quality/runs", include_in_schema=False)
 def history(source: Literal["online", "live", "scenario", "benchmark", "validation", "all"] = "online",
             benchmark_id: str | None = None, cursor: str | None = None,
+            metric: Literal["correctness", "groundedness", "topic_relevance", "task_completion"] | None = None,
+            label: Literal["pass", "fail", "not_applicable", "unknown", "pending"] | None = None,
+            evaluator: Literal["all", "current"] = "all", conversation_id: str | None = None,
             limit: int = Query(default=20, ge=1, le=100)):
     from quality.dashboard import run_history
     try:
-        return run_history(source, benchmark_id, cursor, limit)
+        return run_history(source, benchmark_id, cursor, limit, metric, label, evaluator, conversation_id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
 

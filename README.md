@@ -42,7 +42,7 @@ Phoenix evaluators assess its final answer asynchronously. The dashboard and
 monitor read scores from **Phoenix span annotations**, refreshing every five seconds.
 
 The live window holds the latest **20 conversations within 24 hours**, separated by
-agent and evaluator version. After **10 applicable judgments** for any of the four
+agent and evaluator version. After **10 applicable judgments** for any of the three primary
 metrics, a rate **below 85%** opens a deduplicated incident and sends email to the
 local SMTP inbox. Recovery requires **95%**. Unknown/pending/not-applicable results
 never count as passes. No sample requests are injected into this window.
@@ -157,7 +157,7 @@ the local inbox deduplicates Message-ID.
 | Correctness | Current trip constraints, direction, dates, duration, budget, multi-turn changes |
 | Groundedness | Factual support from independent fixture evidence and known data limitations |
 | Topic relevance | Travel-domain behavior, evaluated separately from factual accuracy |
-| Task completion | Useful deliverable; a business-outcome proxy, not booking conversion |
+| Completion diagnostic | Retained in trace details; excluded from new alerts and checkpoint decisions |
 
 Code checks diagnose tool failures. Phoenix judges evaluate the final answer, so a handled tool error need not fail the response. Unknown and not-applicable labels remain visible and are excluded from pass-rate denominators.
 

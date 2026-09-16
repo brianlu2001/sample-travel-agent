@@ -15,7 +15,7 @@ import httpx
 
 from quality import store
 from quality.benchmarks import create, run
-from quality.config import REPAIR_MODEL, ROOT, STATE, agent_version, fingerprint, fixture_version
+from quality.config import PRIMARY_METRICS, REPAIR_MODEL, ROOT, STATE, agent_version, fingerprint, fixture_version
 from quality.evaluation import scenarios
 from quality.privacy import safe_payload
 from quality.profiles.travel import POLICY
@@ -41,7 +41,7 @@ def evidence_for(baseline):
         if counts.get(category, 0) >= 2:
             continue
         evaluation = row["evaluation"]
-        if not any(m["label"] == "fail" for m in evaluation["metrics"].values()) and not any(d["label"] == "fail" for d in evaluation["tool_diagnostics"]):
+        if not any(m["label"] == "fail" for name, m in evaluation["metrics"].items() if name in PRIMARY_METRICS) and not any(d["label"] == "fail" for d in evaluation["tool_diagnostics"]):
             continue
         counts[category] = counts.get(category, 0)+1
         evidence.append({"run_id": run_id, "category": category, "input": row["event"]["input"],
@@ -61,7 +61,7 @@ def live_evidence(incident):
             continue
         if not evaluation or evaluation["version"] != data["evaluator_version"]:
             continue
-        if not any(m["label"] == "fail" for m in evaluation["metrics"].values()):
+        if not any(m["label"] == "fail" for name, m in evaluation["metrics"].items() if name in PRIMARY_METRICS):
             continue
         evidence.append({"run_id": run_id, "category": data["source"] + "_incident",
                          "input": row["event"]["input"], "answer": row["event"]["output"],
@@ -394,7 +394,7 @@ def repair(incident_id, baseline_id, revision_of=None):
             blockers.append("Privacy redaction failed")
         if candidate_report.get("tool_contract_failures"):
             blockers.append("Deterministic tool contract failures remain")
-        if any(m.get("unknown") or m.get("pending") for m in candidate_report["metrics"].values()):
+        if any(m.get("unknown") or m.get("pending") for name, m in candidate_report["metrics"].items() if name in PRIMARY_METRICS):
             blockers.append("Targeted evaluation is incomplete")
         payload["gate"] = {"passed": not blockers, "reasons": blockers, "stage": "targeted", "full_checkpoint": "pending"}
         rows = ["| Metric | Targeted candidate results |", "|---|---:|"]

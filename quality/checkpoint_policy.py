@@ -2,12 +2,12 @@
 import random
 from statistics import mean
 
-from quality.config import METRICS, ROOT, file_hash, fingerprint
+from quality.config import PRIMARY_METRICS, ROOT, file_hash, fingerprint
 
-POLICY = {"name": "daily-checkpoints-v1", "interval_seconds": 86400,
+POLICY = {"name": "daily-checkpoints-v2", "interval_seconds": 86400,
           "targeted_cases": 15, "targeted_repetitions": 1, "max_revisions": 3,
           "material_delta": .02, "minimum_pairs": 10, "bootstrap_samples": 4000,
-          "family_alpha": .05, "comparison_slots": 16}
+          "family_alpha": .05, "comparison_slots": 12, "metrics": PRIMARY_METRICS}
 
 
 def version():
@@ -26,10 +26,10 @@ def compare(before_rows, after_rows):
     """Bootstrap whole scenarios so repeated generations are not independent samples.
 
     Intervals are exploratory benchmark uncertainty, not calibrated guarantees.
-    A conservative family adjustment covers 4 metrics × 2 cohorts × 2 comparators.
+    A conservative family adjustment covers 3 metrics × 2 cohorts × 2 comparators.
     """
     metrics = {}
-    for name in METRICS:
+    for name in PRIMARY_METRICS:
         before, after = _groups(before_rows, name), _groups(after_rows, name)
         differences = []
         excluded, applicability_changed = [], []

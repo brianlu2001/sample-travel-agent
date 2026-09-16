@@ -18,6 +18,9 @@ ARIZE_API_KEY = os.getenv("ARIZE_API_KEY", "")
 ARIZE_SPACE_ID = os.getenv("ARIZE_SPACE_ID", "")
 ARIZE_OTLP_ENDPOINT = os.getenv("ARIZE_OTLP_ENDPOINT", "https://otlp.arize.com/v1").rstrip("/")
 METRICS = ("correctness", "groundedness", "topic_relevance", "task_completion")
+# Keep the audited evaluator and historical evidence intact. Completion is a
+# diagnostic only; active monitoring and new checkpoint decisions use these three.
+PRIMARY_METRICS = ("correctness", "groundedness", "topic_relevance")
 WINDOW = int(os.getenv("QUALITY_WINDOW", "20"))
 MIN_SAMPLES = int(os.getenv("QUALITY_MIN_SAMPLES", "10"))
 THRESHOLD = float(os.getenv("QUALITY_THRESHOLD", "0.85"))

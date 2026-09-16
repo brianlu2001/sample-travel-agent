@@ -1,5 +1,8 @@
 # Active evaluation cadence
 
+Completion is retained as a diagnostic, outside new alert and acceptance decisions.
+Historical four-metric policies and immutable measurements are preserved.
+
 ## Revision checks and daily checkpoints
 
 | Trigger | Evaluation | Decision |
@@ -33,11 +36,11 @@ compare cumulative results against both the original compatible baseline and the
 last explicitly human-approved checkpoint. With no human-approved checkpoint,
 both comparisons use the original baseline.
 
-Each metric records pooled rates, every observed decline, changes in applicability,
+Each primary metric records pooled rates, every observed decline, changes in applicability,
 and paired scenario-level changes. Two generations of one scenario remain one
 cluster. The current policy uses 4,000 deterministic bootstrap resamples, at least
 10 fully evaluable paired scenarios, and a two-percentage-point practical margin.
-The interval tails use 0.05 / 16 to conservatively account for four metrics, two
+The interval tails use 0.05 / 12 to conservatively account for three primary metrics, two
 cohorts (overall and held out), and two comparators. Intervals describe this small
 benchmark; they do not establish judge accuracy or population-level guarantees.
 
@@ -49,7 +52,7 @@ block approval. A checkpoint is improved only when its aggregate comparisons
 support improvement without unresolved metric uncertainty. Small held-out samples
 will often make the overall conclusion inconclusive, requiring human judgment.
 
-Every confirmed metric regression opens a deduplicated incident and actual SMTP
+Every confirmed primary-metric regression opens a deduplicated incident and actual SMTP
 alert. The workflow proposes a follow-up using development failures only. A chain
 allows at most three proposals; lack of usable development evidence or exhaustion
 of this limit leaves the issue for human review. Inconclusive changes do not

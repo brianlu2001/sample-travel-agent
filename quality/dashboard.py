@@ -6,7 +6,7 @@ import uuid
 from phoenix.client import Client
 
 from quality import store
-from quality.config import ARIZE_API_KEY, ARIZE_SPACE_ID, METRICS, MIN_SAMPLES, PERSISTENCE, PHOENIX, RECOVERY, THRESHOLD, WINDOW, agent_version
+from quality.config import ARIZE_API_KEY, ARIZE_SPACE_ID, METRICS, PRIMARY_METRICS, MIN_SAMPLES, PERSISTENCE, PHOENIX, RECOVERY, THRESHOLD, WINDOW, agent_version
 from quality.evaluation import evaluator_version
 from quality.monitoring import current_window, summarize
 
@@ -90,15 +90,21 @@ def state():
             "evaluator_version": active_evaluator,
             "serving_agent": {**serving_agent, "restart_required": serving_agent["version"] != agent_version()},
             "version_updates": recent_updates(active_evaluator, repairs),
-            "monitor": {"threshold": THRESHOLD, "window": WINDOW, "minimum_samples": MIN_SAMPLES,
+            "monitor": {"metrics": PRIMARY_METRICS, "threshold": THRESHOLD, "window": WINDOW, "minimum_samples": MIN_SAMPLES,
                         "max_age_hours": 24, "persistence": PERSISTENCE, "recovery_threshold": RECOVERY},
             "calibration": calibration()}
 
 
-def run_history(source="online", benchmark_id=None, cursor=None, limit=20):
+def run_history(source="online", benchmark_id=None, cursor=None, limit=20,
+                metric=None, label=None, evaluator="all", conversation_id=None):
     """Stable pagination over recorded executions; never limited to the live window."""
     if source not in ("online", "live", "scenario", "benchmark", "validation", "all") or not 1 <= limit <= 100:
         raise ValueError("Invalid history filter")
+    if metric is not None and metric not in METRICS:
+        raise ValueError("Invalid metric filter")
+    if label not in (None, "pass", "fail", "unknown", "not_applicable", "pending") or evaluator not in ("all", "current"):
+        raise ValueError("Invalid evaluation filter")
+    active = evaluator_version()
     clauses, args = [], []
     if source == "online":
         clauses.append("source IN ('live','scenario')")
@@ -108,6 +114,22 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20):
     if benchmark_id:
         clauses.append("benchmark_id=?")
         args.append(benchmark_id)
+    if conversation_id:
+        clauses.append("COALESCE(json_extract(event,'$.conversation_id'),id)=?")
+        args.append(conversation_id)
+    if evaluator == "current":
+        clauses.append("(evaluation IS NULL OR json_extract(evaluation,'$.version')=?)")
+        args.append(active)
+    if label:
+        # Filter before counting and pagination. Missing judgments are pending;
+        # N/A and unknown remain distinct from both passes and failures.
+        selected = (metric,) if metric else PRIMARY_METRICS
+        clauses.append("(" + " OR ".join("COALESCE(json_extract(evaluation,?),'pending')=?" for _ in selected) + ")")
+        for name in selected:
+            args.extend((f"$.metrics.{name}.label", label))
+    elif metric:
+        clauses.append("json_extract(evaluation,?) IS NOT NULL")
+        args.append(f"$.metrics.{metric}")
     scope = " AND ".join(clauses) or "1=1"
     total = store.rows("SELECT COUNT(*) n FROM runs WHERE " + scope, args)[0]["n"]
     if cursor:
@@ -121,7 +143,6 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20):
         args.extend((before, before, identifier))
     where = " AND ".join(clauses) or "1=1"
     rows = store.rows("SELECT * FROM runs WHERE " + where + " ORDER BY created DESC,id DESC LIMIT ?", (*args, limit+1))
-    active = evaluator_version()
     items = []
     for row in rows[:limit]:
         event = json.loads(row["event"])
@@ -131,6 +152,7 @@ def run_history(source="online", benchmark_id=None, cursor=None, limit=20):
         items.append({"id": row["id"], "created": row["created"], "source": row["source"],
                       "benchmark_id": row["benchmark_id"], "scenario_id": row["scenario_id"],
                       "version": row["version"], "question": str(question)[:240],
+                      "conversation_id": event.get("conversation_id") or row["id"],
                       "status": event.get("status"), "trace_id": event.get("trace_id"),
                       "tool_count": len(event.get("tools", [])),
                       "metrics": evaluation.get("metrics") if evaluation else None,

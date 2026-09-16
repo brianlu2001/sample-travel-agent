@@ -54,7 +54,7 @@ no external email delivery is claimed.
    task completion. Tool diagnostics remain separate from final-answer quality.
 3. Once annotations arrive in Phoenix, the monitor updates the latest **20 conversations
    within 24 hours**, for the current agent and evaluator version.
-4. After **10 applicable labels** for any of the four metrics, **below 85%** creates an
+4. After **10 applicable labels** for any of the three primary metrics, **below 85%** creates an
    incident and email immediately. At least **95%** resolves it. Unknown, pending
    and not-applicable labels are excluded from pass-rate denominators and shown.
 5. A live flag starts a repair investigation using the failing real conversations.

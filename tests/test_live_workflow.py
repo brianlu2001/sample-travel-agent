@@ -54,20 +54,20 @@ def test_window_uses_latest_turn_per_conversation_including_unexported(monkeypat
 
 
 @pytest.mark.parametrize("passes,incident", [(17, False), (16, True)])
-def test_all_four_metrics_warn_strictly_below_85_percent(monkeypatch, passes, incident):
+def test_three_primary_metrics_warn_strictly_below_85_percent(monkeypatch, passes, incident):
     from quality import monitoring
-    from quality.config import METRICS
+    from quality.config import METRICS, PRIMARY_METRICS
     rows = [{"id": str(i), "trace_id": str(i), "evaluation": {"metrics": {
         name: {"label": "pass" if i < passes else "fail"} for name in METRICS}}} for i in range(20)]
     monkeypatch.setattr(monitoring, "current_window", lambda *a, **kw: rows)
     monkeypatch.setattr(monitoring, "THRESHOLD", .85)
     monitoring.monitor("live", "agent", evaluation_version="judge")
     incidents = store.rows("SELECT payload FROM incidents")
-    assert len(incidents) == (4 if incident else 0)
+    assert len(incidents) == (3 if incident else 0)
     if incident:
-        assert {json.loads(i["payload"])["metric"] for i in incidents} == set(METRICS)
+        assert {json.loads(i["payload"])["metric"] for i in incidents} == set(PRIMARY_METRICS)
         monitoring.monitor("live", "agent", evaluation_version="judge")
-        assert len(store.rows("SELECT * FROM jobs WHERE kind='email'")) == 4
+        assert len(store.rows("SELECT * FROM jobs WHERE kind='email'")) == 3
 
 
 def test_history_cursor_keeps_all_records_when_timestamps_tie():
@@ -145,7 +145,7 @@ def test_live_incident_schedules_without_an_offline_baseline_and_deduplicates():
     store.set_setting("auto_repair", True)
     store.set_setting("evaluator_audit", {"status": "passed", "evaluator_version": evaluator_version()})
     for index, source in enumerate(("benchmark", "live", "live")):
-        payload = {"source": source, "version": agent_version(), "evaluator_version": evaluator_version(),
+        payload = {"source": source, "metric": "correctness", "version": agent_version(), "evaluator_version": evaluator_version(),
                    "window_run_ids": ["actual-id-in-production"], "failing_run_ids": ["actual-id-in-production"]}
         store.execute("INSERT INTO incidents(id,fingerprint,status,created,updated,payload) VALUES(?,?,?,?,?,?)",
                       (str(index), str(index), "open", time.time(), time.time(), json.dumps(payload)))

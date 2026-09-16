@@ -5,7 +5,7 @@ import time
 import uuid
 
 from quality import store
-from quality.config import METRICS, MIN_SAMPLES, PERSISTENCE, RECOVERY, THRESHOLD, WINDOW, fingerprint
+from quality.config import METRICS, PRIMARY_METRICS, MIN_SAMPLES, PERSISTENCE, RECOVERY, THRESHOLD, WINDOW, fingerprint
 
 
 def summarize(run_rows):
@@ -65,7 +65,7 @@ def monitor(source, version, benchmark_id=None, evaluation_version=None):
                                  (source, version, benchmark_id, evaluation_version))[0]["n"]
     previous = store.rows("SELECT state FROM monitors WHERE scope=?", (scope,))
     state = json.loads(previous[0]["state"]) if previous else {}
-    for name in METRICS:
+    for name in PRIMARY_METRICS:
         metric = report["metrics"][name]
         key = fingerprint([scope, name])
         incident = store.rows("SELECT * FROM incidents WHERE fingerprint=?", (key,))
@@ -126,6 +126,8 @@ def schedule_repair():
         return
     for incident in store.rows("SELECT * FROM incidents WHERE status='open' ORDER BY created"):
         data = json.loads(incident["payload"])
+        if data.get("metric") not in (*PRIMARY_METRICS, "privacy"):
+            continue
         if data.get("source") not in ("live", "scenario") or data.get("benchmark_id") or not data.get("failing_run_ids"):
             continue
         if data.get("evaluator_version") != evaluator_version() or data.get("version") != agent_version():

@@ -122,6 +122,6 @@ def recent_updates(active_evaluator, repairs):
                         "version": versions[0]["version"] if len(versions) == 1 else payload.get("candidate_hash"),
                         "previous_version": None, "status": repair["status"],
                         "summary": payload.get("summary", "Repair investigation"),
-                        "detail": "Proposed change; not a running-agent update",
+                        "detail": "Merged on GitHub; see agent startup history for the running version" if repair["status"] == "merged" else "Proposed change; not a running-agent update",
                         "pr_url": payload.get("pr_url"), "requires_revalidation": repair.get("requires_revalidation", False)})
     return sorted(updates, key=lambda entry: entry["at"], reverse=True)[:20]

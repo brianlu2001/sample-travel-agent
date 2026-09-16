@@ -1,6 +1,10 @@
 # How ongoing quality is measured
 
-Each real agent turn produces a sanitized final answer, conversation and tool trace.
+Each real agent turn produces a sanitized response, conversation and tool trace.
+The three primary metrics are correctness, groundedness and topic relevance.
+Completion remains a diagnostic for continuity; it no longer triggers new live
+alerts or checkpoint regressions. The audited four-output judge is unchanged, so
+existing baseline scores and the evaluator audit remain compatible.
 An asynchronous worker applies four independent Phoenix evaluators using Claude
 Sonnet 4.6 at temperature zero. That reduces randomness; it does not guarantee a
 correct judgment. No human calibration accuracy has yet been established.
@@ -10,11 +14,13 @@ correct judgment. No human calibration accuracy has yet been established.
 | Correctness | Satisfies the latest request and constraints: destination, direction, dates, duration, budget, supported capabilities. | A necessary clarification or honest limitation can pass. |
 | Groundedness | Material factual claims agree with independent fixture evidence, with limitations disclosed. | Suggested itinerary activities and general tips need no database entry. No material factual claims means not applicable. |
 | Topic relevance | Travel assistance, greetings, relevant clarifications, or a polite redirect from unrelated tasks. | An inaccurate travel answer can still be relevant. |
-| Task completion proxy | Provides the useful deliverable the user requested. | Clarification alone fails completion even if correct. Unrelated requests are not applicable. This is not measured booking conversion or satisfaction. |
+| Completion diagnostic | Provides the useful deliverable the user requested. | Clarification alone fails completion even if correct. Unrelated requests are not applicable. This is not measured booking conversion or satisfaction. |
 
 ## How a judgment is reached
 
-1. Inspect the **final response** against the current conversation. Later explicit
+1. Inspect **this turn’s user-visible response** against the current conversation.
+   “Final response” here means after this turn’s tool calls, not the last turn of
+   the entire conversation. Every turn is evaluated asynchronously. Later explicit
    user constraints override earlier ones.
 2. Run a conservative code check for explicit requested duration versus numbered
    day sections in that final response. Empty headings and unsupported formats are
@@ -51,15 +57,49 @@ the execution/retry journal and incident state, not the authoritative live score
 - Coverage is **(pass + fail + not applicable) / requests**. High rates with low
   coverage can mislead. The UI displays applicable and excluded counts. Wilson intervals remain in the
   API evidence; they do not measure judge error or repeated-case correlation.
-- Each of the four metrics needs **10 applicable results**. A rate below
+- Each of the three primary metrics needs **10 applicable results**. A rate below
   **85%** opens a deduplicated incident immediately after evaluation and delivers
   local SMTP email. A rate at least **95%** resolves it. This is an operational threshold, not proof
-  of statistical population drift. Task completion uses the same alert rule.
+  of statistical population drift. Completion labels remain inspectable without creating new alerts.
 - Jobs run asynchronously. Dashboard refresh is every **5 seconds**; results may
   take longer while provider requests complete or retry.
 - Human labels are kept separately. Judge agreement is calculated only against
   labels for the active evaluator. Versioning prevents silent mixing of rubrics;
   it does not establish accuracy without representative human review.
+
+## LLM versus programmatic evaluation
+
+| Component | Implementation |
+| --- | --- |
+| Correctness semantics | Phoenix `ClassificationEvaluator` with a custom travel rubric and Claude Sonnet 4.6. |
+| Explicit numbered-day coverage | Code: detects decisive missing or duplicated day sections and overrides correctness to fail; passing this check does not prove overall correctness. |
+| Groundedness semantics | Phoenix LLM judge compares the response with independently derived fixture evidence. Evidence construction and tool-contract checks are code. |
+| Topic relevance | Phoenix LLM judge checks travel scope or an appropriate redirect. |
+| Completion diagnostic | Existing LLM rubric with the same deterministic day/error overrides; retained outside headline metrics and new policy decisions. |
+| Privacy/error handling, counts and alerts | Programmatic redaction checks, error classification, pass-rate denominators, windows, threshold checks and deduplication. |
+| Human feedback | Separate human labels, never presented as LLM or programmatic judgments. |
+
+## Intermediate turns and a proposed hybrid
+
+**Implemented:** every user-visible turn is evaluated; trace history can filter by
+metric, label and evaluator version. The Conversation action lists earlier turns
+even when the latest response passes. Missing evaluations are pending, separate
+from unknown and not applicable. Completion can be explicitly selected as a diagnostic.
+
+**Proposed next:** keep the latest-turn outcome score over 20 conversations, and
+add a separate session review for avoidable repetition, lost constraints and
+user corrections. Run that review after inactivity/explicit completion, with early
+review after repeated failed turns. Evaluate the request known at each turn, never
+penalize an appropriate clarification for failing to answer a future request.
+
+Programmatic turn/tool-error/repeated-call counts can prioritize that review.
+They are signals, not proof of frustration. A new semantic conversation rubric
+needs labeled examples and an audit before it can trigger automatic repair.
+Keep expensive semantic judging asynchronous; pre-send hard checks are a separate
+product guardrail decision. Do not treat private model reasoning as user output.
+
+Phoenix already groups these traces through `session.id`. See the official
+[session documentation](https://arize.com/docs/phoenix/tracing/llm-traces/sessions).
 
 ## Confirmed evaluator defect: Tokyo three-day trace
 

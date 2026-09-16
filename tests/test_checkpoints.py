@@ -52,6 +52,24 @@ def target(version="b"*64):
     return next(t for t in cp.targets() if t["id"] == "candidate:root")
 
 
+def test_completion_regression_does_not_gate_new_checkpoints():
+    before = [{"scenario_id": str(i), "evaluation": {"metrics": {
+        name: {"label": "pass"} for name in METRICS}}} for i in range(12)]
+    after = copy.deepcopy(before)
+    for row in after:
+        row["evaluation"]["metrics"]["task_completion"]["label"] = "fail"
+    result = policy.compare(before, after)
+    assert "task_completion" not in result["metrics"]
+    assert result["conclusion"] != "regressed"
+
+
+def test_retired_pr_target_is_preserved_but_not_scheduled():
+    record = target()
+    cp.register(record["id"], {**record, "retired": True, "retired_reason": "merged"})
+    assert not cp.targets()
+    assert store.rows("SELECT * FROM checkpoint_targets")
+
+
 def test_daily_cadence_requires_elapsed_day_and_unmeasured_version():
     measured("baseline")
     t = target()
