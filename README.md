@@ -1,6 +1,28 @@
 # Travel Agent Quality Lab
 
-A working travel-agent demo with Phoenix tracing, evaluations, a live dashboard, alerts, and an evidence-driven repair workflow. The original agent stays active; improvements run separately and become a draft PR for human review.
+A travel-agent demo with Phoenix tracing, evaluations, a live dashboard, alerts, and an evidence-driven repair workflow. The deployed agent keeps serving chats while a separate Claude Agent SDK session investigates failures and proposes reviewed code changes. A PR merge does not automatically deploy or restart the running agent.
+
+## Workflow at a glance
+
+```mermaid
+flowchart LR
+    U[Live chat] --> A[Travel agent and tools]
+    A --> P[Redacted OpenInference traces in Phoenix]
+    P --> E[Phoenix evaluations]
+    E --> M[20-conversation monitoring window]
+    M -->|Below 85%, at least 10 applicable| I[Incident and SMTP email]
+    I --> B[Measured baseline]
+    B --> R[Claude Agent SDK repair session]
+    R --> T[Checks and targeted Phoenix experiment]
+    T -->|Inspect and revise if needed| R
+    R -->|Validated candidate| PR[Draft PR for human review]
+```
+
+There are **two agent roles**: the travel agent and the repair agent. Each repair
+investigation gets one SDK session; different metrics can have concurrent sessions.
+Evaluation workers, LLM judges, queue consumers and SMTP delivery are supporting
+services, not additional autonomous repair agents. The SDK controls investigation,
+edits, validation, revisions and draft publication through constrained tools.
 
 ## Open the demo
 
@@ -13,7 +35,7 @@ The agent has four tools: flight lookup, hotel lookup, fixture weather, and itin
 
 ## Setup
 
-Use Python 3.13 and uv. Phoenix has its own environment to preserve the assessed agent's Anthropic SDK.
+Use Python 3.13, uv and Git on PATH, with a funded Anthropic API key. Phoenix has its own environment to preserve the assessed agent's Anthropic SDK. Node.js/npm is needed only for the optional Phoenix CLI commands below; the Claude Agent SDK includes its own Claude runtime.
 
 ```powershell
 uv sync --locked --extra dev --python 3.13
@@ -32,6 +54,8 @@ Services run in the background on loopback. On Linux/macOS use the corresponding
 ## Run the workflow
 
 ### 1. Enable the live feedback loop
+
+On a fresh installation, first [audit the evaluator](#validate-the-evaluator-before-enabling-automated-proposals). Automatic proposals require a passed audit for the active evaluator version.
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.demo enable-repair
@@ -113,7 +137,9 @@ publication tools itself. Workers retain durable delivery and per-metric locks.
 The dashboard opens on **Live**, with **Benchmarks** as the other metric view.
 Trace history defaults to live conversations. Inspect a request for its final answer,
 judgments, preserved prior judgments and separate tool diagnostics. Human labels calibrate judges;
-they do not silently rewrite benchmark results.
+they are stored as separate `human_*` Phoenix annotations and do not overwrite LLM
+labels, rolling scores or immutable benchmark results. Metric/label filters apply
+before trace pagination; inspecting a historical version shows that version's judgment.
 
 **Inspect → Trace call tree** reads the real Phoenix spans. Expand an agent, LLM,
 or tool call to see its redacted inputs/outputs, parent span, duration, execution
@@ -128,7 +154,8 @@ create releases. Candidate experiments never mark a patch as deployed. New servi
 code is recorded when the API loads it; editing files alone displays a restart notice.
 
 **Email delivery evidence** shows actual SMTP inbox receipts for
-`travel-agent-dev@example.com`: sender, recipient, received time, Message-ID and
+`travel-agent-dev@example.com`: recipient, queued/accepted/received times, subject,
+message body, Message-ID and
 the sender's recorded SMTP response. A `250` acceptance plus a matching inbox row
 proves local delivery. It does not prove delivery to an external team mailbox.
 Older receipts remain visible without inventing missing sender responses.
@@ -166,7 +193,8 @@ enable a redacted OTLP mirror to Arize AX. `/v1` is normalized to the HTTP
 Phoenix remains the OSS workbench for evaluations, annotations and experiments;
 Arize AX is the authenticated hosted tracing destination. Their credentials are
 not interchangeable. Local Phoenix does not require a key with authentication
-disabled. The dashboard reports actual collector delivery and readback status.
+disabled. `/quality/state` exposes recorded collector delivery and readback status;
+the simplified dashboard focuses on quality metrics, escalations and traces.
 
 ### Operations
 
@@ -192,10 +220,27 @@ processes. The Kubernetes profile uses two repair pods and PostgreSQL push wakeu
 To automate PR lifecycle updates outside loopback, configure a signed GitHub
 `pull_request` webhook at `/quality/github/webhook` and `QUALITY_GITHUB_WEBHOOK_SECRET`.
 The local `sync-prs` command confirms actual GitHub state without exposing this app.
+Without an incoming webhook or an explicit sync, a local PR record can retain its
+previous status even after the GitHub PR has been merged.
 An explicit `python -m scripts.demo review-failures --metric groundedness --run-id RUN_ID`
 can investigate a recorded current failure when the rolling window is healthy.
 It uses the same baseline, metric lock and PR gates. The dashboard labels this as
 an operator-requested review; it does not invent a threshold breach or send a threshold email.
+
+**If a response stays pending:** evaluations are asynchronous and make separate
+judge calls, so the chat can finish before its labels appear. Check the dashboard's
+provider/worker status, `/quality/state` and `.quality/worker.log`. A saved provider
+credit pause requires [explicit resumption](#resume-after-a-provider-credit-interruption)
+after credits are restored. Pending/unknown results are excluded from pass rates.
+The current warning window requires acknowledged Phoenix annotations; recorded
+history can show a completed local judgment before its export finishes. Previously
+redacted version metadata no longer prevents existing Phoenix scores from being read.
+
+After pulling merged agent code, restart the local services with `scripts.demo stop`
+and `scripts.demo start` using the Python invocation above. The same state directory
+retains traces, evaluations, email receipts and versions. In-flight jobs may resume
+after their leases expire. Existing scheduling and retry rules still apply; a
+restart does not erase or replace recorded evidence.
 
 ## Evaluation policy
 
@@ -206,7 +251,17 @@ an operator-requested review; it does not invent a threshold breach or send a th
 | Topic relevance | Travel-domain behavior, evaluated separately from factual accuracy |
 | Completion diagnostic | Retained in trace details; excluded from new alerts and checkpoint decisions |
 
-Code checks diagnose tool failures. Phoenix judges evaluate the final answer, so a handled tool error need not fail the response. Unknown and not-applicable labels remain visible and are excluded from pass-rate denominators.
+The three primary rubrics are customer-defined Phoenix `ClassificationEvaluator`
+instances using an Anthropic LLM judge. Programmatic checks validate tool contracts
+and explicit itinerary day coverage; a failed day-coverage check can determine
+correctness/completion without a judge call. Independent fixture references ground
+the assessment. A handled tool error need not fail the final response.
+
+Every completed assistant turn is evaluated with the conversation context available
+at that point. There is no separate whole-conversation reviewer. The rolling window
+uses each conversation's latest response; earlier turn scores remain inspectable.
+Pass rate is `pass / (pass + fail)`. Pending, unknown and not-applicable labels stay
+visible and are excluded from that denominator. Completion remains a diagnostic.
 
 Alerts use the live-window policy above. Benchmark and validation traffic cannot open live quality incidents. Agent and evaluator versions stay separate. Redaction failure withholds content and queues an immediate incident. Threshold breaches are operational signals, not statistical proof of population drift.
 
@@ -235,7 +290,11 @@ uv run ruff check agent quality tests scripts
 uv pip check
 ```
 
-Unit tests use temporary databases and do not export test fixtures as telemetry. CI needs no LLM credentials; paid benchmarks run on a qualifying live incident or explicit operator request.
+Unit tests use temporary databases and do not export test fixtures as telemetry.
+CI needs no LLM credentials and checks the PostgreSQL backend, Kubernetes manifests
+and container as well as the Python suite. Paid benchmarks run for a required
+baseline, eligible scheduled checkpoint or explicit operator request; candidate
+development experiments also use real provider calls.
 
 - [Architecture and workflow](docs/architecture.md)
 - [Historical measured results](docs/demo-results.md)
@@ -287,10 +346,42 @@ and incident workflow, and retains successful cases, judgments and original fail
 It does not rerun rejected candidates to seek better scores. Unfinished multi-turn
 cases can require a new real conversation; every attempt remains distinguishable.
 
-## Verified current demo
+## Verified runs — September 16, 2026
 
-See [verified end-to-end results](docs/demo-verified.md) for the audited evaluator,
-measured baseline and revision, rejected candidate, real SMTP receipt and draft PR #2.
+The latest live exercise sent **20 independent conversations through `POST /chat`**:
+nine flight questions, seven hotel questions, two weather questions, one general
+travel question and one off-topic request. All answers, tool calls, traces and
+judgments came from actual executions; no result or telemetry was synthesized.
+Agent version: `a56d94e4`; evaluator version: `1c8682c6`.
+
+| Primary metric | Observed result |
+| --- | --- |
+| Correctness | 19/20 passed — 95.0% |
+| Groundedness | 17/18 applicable passed — 94.4%; two not applicable |
+| Topic relevance | 20/20 passed — 100.0% |
+
+All 20 evaluations reached Phoenix and monitoring, with zero pending judgments.
+One response incorrectly calculated `3 × $142` as `$436`; correctness and groundedness
+both flagged it. No new threshold escalation was warranted. This is a small,
+operator-generated live exercise, not a population accuracy or improvement claim.
+
+The pending-score investigation also fixed a real read-path defect: PII redaction
+had masked version metadata used by the Phoenix query. Exact trace/span identity
+now retrieves the existing annotations while retaining source/version isolation.
+The local suite passed **168 tests**, with seven PostgreSQL tests reserved for CI.
+
+PRs [#3](https://github.com/brianlu2001/sample-travel-agent/pull/3) and
+[#4](https://github.com/brianlu2001/sample-travel-agent/pull/4) are merged. The previously
+credit-blocked full checkpoint `0aecd48209aa4c2c83de55c674d6c137` has resumed and completed,
+with 120 final scenario outcomes and a sealed version record. Completion alone does
+not constitute human approval or proof of improvement; inspect its saved result in
+**Benchmarks**. The 20-chat exercise did not trigger a new SDK repair, so it does not
+establish a fresh end-to-end verification of the unified SDK-owned repair loop.
+
+Historical evidence is preserved in [the PR #2 end-to-end run](docs/demo-verified.md),
+[event-driven repair verification](docs/event-workflow-verified.md), and
+[the operator-triggered SDK PR #3 replay](docs/sdk-pr3-replay.md). These are dated
+reports: their original draft-PR or credit-blocked status descriptions are historical.
 
 ### Manual full evaluation and saved baselines
 
