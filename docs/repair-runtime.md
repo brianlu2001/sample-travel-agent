@@ -128,3 +128,8 @@ runtime and tool use, not a measured improvement or a new approved deployment.
 The assessment PDF requires development-time Arize/Phoenix skill or CLI use. This
 runtime integration goes further at the customer's explicit request; it is not
 presented as a separate requirement written into the PDF.
+
+The later [operator-triggered PR #3 replay](sdk-pr3-replay.md) exercised fresh SDK
+investigations, actual targeted experiments and a replacement PR proposal. That
+record distinguishes the SDK's activity from the remaining agent and evaluator
+quality limitations; it does not claim a new automatic live escalation.
