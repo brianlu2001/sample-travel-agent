@@ -64,6 +64,7 @@ def validate_tools(calls):
     for call in calls if isinstance(calls, list) else []:
         name, args, result = call["name"], call["arguments"], call["result"]
         failures = []
+        identity_withheld = False
         try:
             expected = reference_tool(name, args)
             if name == "search_flights" and isinstance(result, list):
@@ -80,7 +81,14 @@ def validate_tools(calls):
                 else:
                     allowed = {h["name"]: h for h in expected["matches"]}
                     for hotel in result:
-                        if hotel.get("name") not in allowed:
+                        hotel_name = hotel.get('name', '')
+                        if '[' in hotel_name and ']' in hotel_name:
+                            # Redaction is not evidence that the agent invented
+                            # a hotel. Do not guess or reconstruct the hidden name.
+                            identity_withheld = True
+                            if hotel.get('price_per_night_usd') not in {h['price_per_night_usd'] for h in expected['matches']}:
+                                failures.append('hotel_price_mismatch')
+                        elif hotel_name not in allowed:
                             failures.append("hotel_stay_outside_availability")
                         elif hotel.get("price_per_night_usd") != allowed[hotel["name"]]["price_per_night_usd"]:
                             failures.append("hotel_price_mismatch")
@@ -93,7 +101,10 @@ def validate_tools(calls):
         except (KeyError, TypeError, ValueError):
             expected = {"error": "Invalid tool arguments; do not invent an answer."}
             failures.append("invalid_tool_arguments")
-        diagnostics.append({"tool": name, "span_id": call.get("span_id"), "label": "fail" if failures else "pass", "failures": sorted(set(failures))})
+        diagnostics.append({"tool": name, "span_id": call.get("span_id"),
+                            "label": "fail" if failures else "unknown" if identity_withheld else "pass",
+                            "failures": sorted(set(failures)),
+                            **({'limitation':'Hotel identity is redacted; identity/availability comparison is inconclusive.'} if identity_withheld else {})})
         evidence.append({"tool": name, "arguments": args, "observed_result": result, "independent_reference": expected})
     return diagnostics, evidence
 

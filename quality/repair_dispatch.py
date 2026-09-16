@@ -11,7 +11,8 @@ ACTIVE = ('queued', 'waiting_baseline', 'running', 'awaiting_review', 'needs_att
 
 
 def metric_key(source, metric):
-    return fingerprint([PROJECT, source, metric])
+    # Offline checkpoints for the deployed agent must not bypass a live lock.
+    return fingerprint([PROJECT, 'live' if source == 'checkpoint' else source, metric])
 
 
 def active(source, metric):
@@ -52,6 +53,8 @@ def schedule(incident):
 
 
 def update(identifier, state, **detail):
+    existing = store.rows('SELECT detail FROM repair_requests WHERE id=?', (identifier,))
+    detail = {**(json.loads(existing[0]['detail']) if existing else {}), **detail}
     store.execute('UPDATE repair_requests SET state=?,updated=?,detail=? WHERE id=?',
                   (state, time.time(), json.dumps(detail), identifier))
 
@@ -121,15 +124,59 @@ def execute(identifier):
     store.execute('UPDATE incidents SET payload=? WHERE id=?', (json.dumps(data), incident['id']))
     try:
         repair_id = remediation.repair(incident['id'], baseline_id, request_id=identifier)
-        repair = store.rows('SELECT * FROM repairs WHERE id=?', (repair_id,))[0]
-        payload = json.loads(repair['payload'])
-        status = repair['status']
-        state = ('awaiting_review' if status in ('pr_open','awaiting_review') else
-                 'needs_attention' if status in ('awaiting_github_access','awaiting_human_evidence') else status)
-        store.execute('UPDATE repair_requests SET state=?,updated=?,repair_id=?,detail=? WHERE id=?',
-                      (state,time.time(),repair_id,json.dumps({'pr_url':payload.get('pr_url'),'summary':payload.get('summary')}),identifier))
+        finish_request(identifier, repair_id)
     except Exception as error:
         update(identifier, 'failed', error_type=type(error).__name__)
+        raise
+
+
+def finish_request(identifier, repair_id):
+    repair = store.rows('SELECT * FROM repairs WHERE id=?', (repair_id,))[0]
+    payload = json.loads(repair['payload'])
+    status = repair['status']
+    state = ('awaiting_review' if status in ('pr_open','awaiting_review') else
+             'needs_attention' if status in ('awaiting_github_access','awaiting_human_evidence') else status)
+    detail = json.loads(store.rows('SELECT detail FROM repair_requests WHERE id=?', (identifier,))[0]['detail'])
+    detail.update(pr_url=payload.get('pr_url'), summary=payload.get('summary'))
+    store.execute('UPDATE repair_requests SET state=?,updated=?,repair_id=?,baseline_id=?,detail=? WHERE id=?',
+                  (state,time.time(),repair_id,payload.get('baseline_id'),
+                   json.dumps(detail),identifier))
+
+
+def execute_legacy(job):
+    """Checkpoint/revision jobs use the same locks as live-event repairs."""
+    from quality.remediation import repair, repair_live_incident
+    args = dict(job['payload'])
+    identifier = args.pop('legacy_request_id', None) or uuid.uuid5(uuid.NAMESPACE_URL, 'legacy-repair:'+job['key']).hex
+    incident = store.rows('SELECT * FROM incidents WHERE id=?', (args['incident_id'],))[0]
+    data = json.loads(incident['payload'])
+    metric = data.get('metric', 'checkpoint_contract')
+    key = metric_key(data['source'], metric)
+    with store.connection() as con:
+        con.execute('BEGIN IMMEDIATE')
+        locked = con.execute("SELECT * FROM repair_requests WHERE metric_key=? AND state IN ('queued','waiting_baseline','running','awaiting_review','needs_attention')", (key,)).fetchone()
+        if locked and locked['id'] != identifier:
+            # A measured revision can update its own pending PR, but never start
+            # a competing investigation or revise an already superseded head.
+            if not args.get('revision_of') or args['revision_of'] != locked['repair_id'] or locked['state'] != 'awaiting_review':
+                return
+            identifier = locked['id']
+        existing = con.execute('SELECT state FROM repair_requests WHERE id=?', (identifier,)).fetchone()
+        if existing and existing['state'] not in ACTIVE:
+            return
+        now = time.time()
+        if not existing:
+            con.execute('INSERT INTO repair_requests VALUES(?,?,?,?,?,?,?,?,NULL,NULL,?)',
+                        (identifier,key,metric,incident['id'],job['key'],'running',now,now,json.dumps({'source':data['source']})))
+        else:
+            con.execute("UPDATE repair_requests SET state='running',updated=? WHERE id=?", (now,identifier))
+        con.execute('UPDATE repair_requests SET detail=? WHERE id=?',
+                    (json.dumps({'source':data['source'],'legacy_arguments':args}),identifier))
+    try:
+        repair_id = repair_live_incident(args['incident_id']) if args.get('live') else repair(**args)
+        finish_request(identifier, repair_id)
+    except Exception as error:
+        update(identifier,'failed',error_type=type(error).__name__)
         raise
 
 
@@ -176,7 +223,10 @@ def retry_failed():
             if request['baseline_id']:
                 con.execute("UPDATE jobs SET state='pending',available=?,attempts=0,lease_until=NULL,owner=NULL WHERE kind IN ('repair_baseline','full_evaluation') AND state='dead' AND json_extract(payload,'$.id')=?",
                             (time.time(),request['baseline_id']))
-            store.enqueue('repair', 'repair-retry:'+request['id']+':'+uuid.uuid4().hex, {'request_id':request['id']}, con)
+            detail = json.loads(request['detail'])
+            arguments = ({**detail['legacy_arguments'],'legacy_request_id':request['id']}
+                         if 'legacy_arguments' in detail else {'request_id':request['id']})
+            store.enqueue('repair', 'repair-retry:'+request['id']+':'+uuid.uuid4().hex, arguments, con)
             count += 1
         return count
 

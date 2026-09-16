@@ -91,11 +91,8 @@ def dispatch(job):
         if payload.get('request_id'):
             from quality.repair_dispatch import execute
             return execute(payload['request_id'])
-        from quality.remediation import repair, repair_live_incident
-        if payload.get("live"):
-            repair_live_incident(payload["incident_id"])
-        else:
-            repair(**payload)
+        from quality.repair_dispatch import execute_legacy
+        execute_legacy(job)
     elif job["kind"] == "full_evaluation":
         from quality.full_evaluation import execute
         execute(payload)

@@ -185,6 +185,45 @@ def test_evaluator_revision_does_not_bypass_pending_metric_lock(monkeypatch):
     assert len(store.rows('SELECT * FROM repair_requests'))==1
 
 
+def test_checkpoint_cannot_bypass_live_metric_lock(monkeypatch):
+    from quality import remediation
+    identifier=dispatch.schedule(incident('live'))
+    dispatch.update(identifier,'awaiting_review')
+    checkpoint=incident('checkpoint')
+    data=json.loads(checkpoint['payload'])
+    data['source']='checkpoint'
+    store.execute('UPDATE incidents SET payload=? WHERE id=?',(json.dumps(data),'checkpoint'))
+    called=[]
+    monkeypatch.setattr(remediation,'repair_live_incident',lambda *a:called.append(a))
+    dispatch.execute_legacy({'key':'checkpoint:one','payload':{'incident_id':'checkpoint','live':True}})
+    assert not called and len(store.rows('SELECT * FROM repair_requests'))==1
+
+
+def test_checkpoint_failure_can_resume_under_its_existing_reservation(monkeypatch):
+    from quality import remediation
+    incident('checkpoint','checkpoint_contract')
+    row=store.rows("SELECT payload FROM incidents WHERE id='checkpoint'")[0]
+    data=json.loads(row['payload'])
+    data['source']='checkpoint'
+    store.execute("UPDATE incidents SET payload=? WHERE id='checkpoint'",(json.dumps(data),))
+    def unavailable(*args):
+        raise ConnectionError('isolated')
+    monkeypatch.setattr(remediation,'repair_live_incident',unavailable)
+    with pytest.raises(ConnectionError):
+        dispatch.execute_legacy({'key':'checkpoint:one','payload':{'incident_id':'checkpoint','live':True}})
+    assert dispatch.retry_failed()==1
+    retry=store.rows("SELECT key,payload FROM jobs WHERE key LIKE 'repair-retry:%'")[0]
+    retry['payload']=json.loads(retry['payload'])
+    def recovered(*args):
+        store.execute('INSERT INTO repairs VALUES(?,?,?,?,?,?)',
+                      ('legacy','checkpoint','pr_open',time.time(),time.time(),json.dumps({'pr_url':'https://github.com/example/repo/pull/1','baseline_id':'sealed'})))
+        return 'legacy'
+    monkeypatch.setattr(remediation,'repair_live_incident',recovered)
+    dispatch.execute_legacy(retry)
+    assert len(store.rows('SELECT * FROM repair_requests'))==1
+    assert dispatch.active('live','checkpoint_contract')['state']=='awaiting_review'
+
+
 def test_recovery_and_rebreach_preserve_pending_pr_evidence(monkeypatch):
     from quality import monitoring
     def rows(label):
@@ -261,3 +300,17 @@ def test_raw_weather_seeds_are_not_judge_evidence():
     assert 'Chicago' in weather['supported_cities'] and 'high_f' not in json.dumps(weather)
     assert reference_tool('get_weather',{'city':'Chicago','date':'2026-10-05'})['high_f']==60
     assert reference_tool('get_weather',{'city':'Tokyo','date':'2026-10-02'})['low_f']==60
+
+
+def test_redacted_hotel_identity_is_inconclusive_but_real_contract_failures_remain():
+    from quality.profiles.travel import validate_tools
+    call={'name':'search_hotels','arguments':{'city':'New York','check_in':'2026-09-14','check_out':'2026-09-18'},
+          'result':[{'name':'[PERSON]','city':'New York','price_per_night_usd':342,'rating':4.6}]}
+    checks,_=validate_tools([call])
+    assert checks[0]['label']=='unknown' and not checks[0]['failures']
+    call['result'][0]['price_per_night_usd']=999999
+    checks,_=validate_tools([call])
+    assert checks[0]['label']=='fail' and 'hotel_price_mismatch' in checks[0]['failures']
+    call['arguments']['check_out']=call['arguments']['check_in']
+    checks,_=validate_tools([call])
+    assert checks[0]['label']=='fail' and 'invalid_stay_accepted' in checks[0]['failures']

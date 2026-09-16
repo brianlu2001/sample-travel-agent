@@ -1,5 +1,5 @@
 const $=s=>document.querySelector(s);
-const names={correctness:'Correctness',groundedness:'Groundedness',topic_relevance:'Topic relevance',task_completion:'Task completion'};
+const names={correctness:'Correctness',groundedness:'Groundedness',topic_relevance:'Topic relevance',task_completion:'Task completion',checkpoint_contract:'Tool and evaluation checks',privacy:'Privacy'};
 const primary=['correctness','groundedness','topic_relevance'];
 const sourceName=source=>source==='scenario'?'Archived simulation':source==='live'?'Live':source;
 const labels={merged:'Merged',pr_open:'Draft PR',pr_closed:'PR closed',awaiting_repair:'Validating fix',not_applicable:'N/A'};

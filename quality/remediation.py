@@ -46,7 +46,8 @@ def evidence_for(baseline):
         counts[category] = counts.get(category, 0)+1
         evidence.append({"run_id": run_id, "category": category, "input": row["event"]["input"],
                          "answer": row["event"]["output"], "tools": row["event"]["tools"],
-                         "metrics": evaluation["metrics"], "diagnostics": evaluation["tool_diagnostics"]})
+                         "metrics": evaluation["metrics"], "diagnostics": evaluation["tool_diagnostics"],
+                         "independent_references": validate_tools(row['event']['tools'])[1]})
     return evidence
 
 

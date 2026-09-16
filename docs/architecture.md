@@ -102,6 +102,9 @@ of the PR's actual state before releasing the lock. For the loopback demo,
 `python -m scripts.demo sync-prs` performs that same confirmation explicitly.
 Rejected/failed attempts remain visible and do not restart on every new sample;
 operational failures can be retried explicitly. Publication problems retain the lock.
+Checkpoint-triggered repairs also acquire these locks. A measured revision may
+update its own existing PR under the accepted daily policy; it cannot create a
+competing repair for a metric that is already awaiting review.
 
 Concurrent PRs can touch the same prompt or tool. They remain separate proposals;
 after merging one, rebase and validate the other against the new baseline before
@@ -134,6 +137,10 @@ See [verified end-to-end results](demo-verified.md) for the completed baseline, 
 - The current evaluator passed 60 regression expectations across 17 actual recorded
   responses. The rubrics are custom travel definitions executed by Phoenix, not
   claimed to be stock Arize metrics. Human calibration is still pending.
+- Weather judgments use the independent date-adjusted reference, not raw catalog
+  seed temperatures. Deterministic hotel checks treat redacted names as unknown
+  identity rather than invented hotels; impossible stays and unsupported prices
+  still fail. Prior judgments and sealed benchmarks retain their original versions.
 - A fresh campaign ran 10 conversations (11 turns). Its Phoenix window measured
   correctness at 6/10, below the configured 85% threshold, opening incident
   `386827bfec4c4e0d85277c5d887fcf33` automatically.
