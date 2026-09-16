@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quality-api
+spec:
+  # The supplied demo chat has in-memory sessions; do not horizontally scale it.
+  # Evaluation workers below are independently scalable.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: quality-api
+  template:
+    metadata:
+      labels:
+        app: quality-api
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: travel-quality:local
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: quality-config
+            - secretRef:
+                name: quality-runtime
+          resources:
+            requests: {cpu: "250m", memory: "512Mi"}
+            limits: {cpu: "2", memory: "2Gi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: state, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              httpHeaders: [{name: Host, value: localhost}]
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              httpHeaders: [{name: Host, value: localhost}]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              httpHeaders: [{name: Host, value: localhost}]
+            periodSeconds: 20
+      volumes:
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: quality-api
+spec:
+  type: ClusterIP
+  selector:
+    app: quality-api
+  ports:
+    - {port: 8000, targetPort: 8000}

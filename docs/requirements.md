@@ -1,5 +1,28 @@
 # Assessment requirements — demo evidence
 
+## What the assessment actually mandates
+
+The supplied `US_FDE_Interview_Screen.pdf`, pages 2–3, requires tracing,
+appropriate evaluations, repeatable automation, and actual Arize/Phoenix skills
+or CLI usage. Page 2 says: “You may use any orchestration tool or workflow system,
+such as the Arize AX Airflow Provider or Kubernetes jobs.” These products are
+examples; neither one is individually mandatory. The local demo uses a Python
+worker. Following the customer's additional scalability request, the repository
+also supplies Kubernetes deployments, a PostgreSQL queue and optional KEDA scaling.
+See [deployment and capacity boundaries](deployment.md); no cluster is claimed to
+be deployed.
+
+Pages 3–4 require a working demo, a customer-facing presentation, a production
+readiness plan and the codebase. There is no requirement to build a custom dashboard
+or to use only the Arize UI. Our small dashboard is a customer-requested summary;
+Phoenix remains the native trace, evaluation, dataset and experiment workbench.
+The presentation and formal implementation specification remain deferred.
+
+The PDF permits local execution but asks for a credible explanation of production
+scale. The SQLite/threaded worker is a local POC. The PostgreSQL/Kubernetes profile
+supports distributed evaluation workers; million-request capacity still requires
+provider quota sizing, load tests, scalable export/monitoring and serving changes.
+
 ## 1. Tracing
 
 OpenInference instruments the actual Anthropic calls and agent/tool spans. PII is
@@ -11,6 +34,13 @@ Relevant files: `quality/runtime.py`, `quality/tracing.py`, `quality/arize_expor
 OpenInference supplies AI semantics/instrumentation; OTLP is its standard transport.
 
 ## 2. Evaluation and business purpose
+
+Human feedback from our dashboard is stored in the separate `feedback` table and
+exported as Phoenix `human_correctness`, `human_groundedness`, etc., with annotator
+kind `HUMAN`. Automated annotations retain their original names and values. Live
+rates use automated annotations; human labels support judge-agreement review and
+do not silently override live scores. Resubmitting feedback replaces the latest
+human review for that run; this POC does not retain a full human-review revision log.
 
 | Evaluation | Why it matters to this customer |
 | --- | --- |
@@ -39,11 +69,13 @@ daily when a version changed, or manually. Human review controls rollout.
 
 The synthetic reference set is only for before/after validation. Its real model
 executions remain labeled as benchmark traffic and cannot trigger the live workflow.
-SQLite leases/retries are sufficient for this local POC; no separate orchestration
-platform is needed to meet the repeatability requirement.
+SQLite leases/retries support the local POC. Kubernetes can run those workers with
+shared PostgreSQL leases, retries and shutdown draining. The controller stays a
+singleton to avoid concurrent schedulers; evaluation workers can scale independently.
 
 Relevant files: `quality/worker.py`, `quality/phoenix_io.py`,
-`quality/monitoring.py`, `quality/remediation.py`, `quality/benchmarks.py`.
+`quality/monitoring.py`, `quality/remediation.py`, `quality/benchmarks.py`,
+`quality/postgres.py`, `deploy/kubernetes/`.
 
 ## 4. Actual skills and CLI usage
 

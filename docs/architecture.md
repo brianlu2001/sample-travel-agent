@@ -31,7 +31,9 @@ flowchart LR
    checks the rolling window every five seconds, and handles alerts and a bounded
    repair investigation. It checks daily checkpoint eligibility every 30 seconds.
    A small SQLite journal provides retries and incident
-   deduplication. There is no Airflow/Kubernetes deployment or external message broker.
+   deduplication. The optional [Kubernetes profile](deployment.md) moves the journal
+   to PostgreSQL and separates evaluation replicas from a singleton controller.
+   The running local demo remains on SQLite; no cluster is deployed.
 4. **Demo UI:** chat, live metric cards, real incidents and repair status. Phoenix
    provides detailed trace/experiment inspection. The local SMTP inbox demonstrates
    actual email delivery without requiring a real development-team mailbox.
@@ -80,10 +82,11 @@ The travel-specific policy is in `quality/profiles/travel.py`; patch validation 
 `quality/remediation.py` and `quality/validation.py` is intentionally specific to
 this repository and must be replaced for a different repository.
 
-This is a single-machine proof of concept, not a tested multi-tenant platform.
-A real deployment would run the same worker against hosted Phoenix/shared storage,
-add reviewed evaluator calibration, and execute proposed code in an isolated runner.
-Those are future deployment changes, not extra demo services.
+The running demo is a single-machine proof of concept. The repository also includes
+a container and PostgreSQL/Kubernetes deployment profile for evaluation replicas.
+It is not a tested multi-tenant platform: scaling chat sessions, exports and
+monitoring, calibrating judges and isolating candidate execution remain production
+work. See [deployment.md](deployment.md) for implemented mechanisms and limits.
 
 See [verified end-to-end results](demo-verified.md) for the completed baseline, rejected candidate, validated revision, SMTP receipt and draft PR.
 

@@ -1,15 +1,16 @@
-"""Durable SQLite WAL job queue and read models. All payloads must be sanitized.
+"""Durable SQLite/PostgreSQL job queue and read models; sanitized payloads only.
 
 Short atomic transactions, leases and unique idempotency keys allow restarts and
-multiple local workers. Network calls never happen inside database transactions.
+multiple workers. Model/export calls never happen inside database transactions.
 """
 import json
+import os
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 
-from quality.config import DB, STATE
+from quality.config import DATABASE_URL, DB, STATE
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -83,6 +84,11 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 @contextmanager
 def connection():
+    if DATABASE_URL:
+        from quality.postgres import connection as postgres_connection
+        with postgres_connection(DATABASE_URL) as con:
+            yield con
+        return
     STATE.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB, timeout=15)
     con.row_factory = sqlite3.Row
@@ -98,6 +104,12 @@ def connection():
 
 
 def init():
+    if os.getenv("QUALITY_REQUIRE_POSTGRES", "false").lower() == "true" and not DATABASE_URL:
+        raise RuntimeError("QUALITY_DATABASE_URL is required for this deployment")
+    if DATABASE_URL:
+        from quality.postgres import initialize
+        initialize(DATABASE_URL, SCHEMA)
+        return
     with connection() as con:
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
@@ -125,6 +137,9 @@ def enqueue(kind, key, payload, con=None):
 def claim(kinds, lease_seconds=300):
     now = time.time()
     owner = uuid.uuid4().hex
+    if DATABASE_URL:
+        from quality.postgres import claim as postgres_claim
+        return postgres_claim(DATABASE_URL, kinds, lease_seconds, now, owner)
     with connection() as con:
         con.execute("BEGIN IMMEDIATE")
         placeholders = ",".join("?" for _ in kinds)
@@ -143,6 +158,14 @@ def claim(kinds, lease_seconds=300):
 def finish(job):
     execute("UPDATE jobs SET state='done',lease_until=NULL WHERE id=? AND owner=?",
             (job["id"], job["owner"]))
+
+
+def renew(job, lease_seconds):
+    """Extend only the currently owned lease; never revive a reassigned job."""
+    with connection() as con:
+        changed = con.execute("UPDATE jobs SET lease_until=? WHERE id=? AND owner=? AND state='running' AND lease_until>?",
+                              (time.time()+lease_seconds, job["id"], job["owner"], time.time()))
+        return changed.rowcount == 1
 
 
 def fail(job, error, max_attempts=3):

@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quality-evaluators
+spec:
+  replicas: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: quality-evaluators
+  template:
+    metadata:
+      labels:
+        app: quality-evaluators
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: evaluator
+          image: travel-quality:local
+          command: [python, -m, quality.worker, --evaluate-only, --evaluators, "2"]
+          envFrom:
+            - configMapRef: {name: quality-config}
+            - secretRef: {name: quality-runtime}
+          resources:
+            requests: {cpu: "250m", memory: "768Mi"}
+            limits: {cpu: "2", memory: "2Gi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            exec:
+              command: [python, -c, "from quality import store; store.rows('SELECT 1')"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - {name: state, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quality-controller
+spec:
+  # Singleton owns monitoring, exports, SMTP, repair and full checkpoints.
+  # Recreate avoids concurrent schedulers and writers to the artifact volume.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: quality-controller}
+  template:
+    metadata:
+      labels: {app: quality-controller}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: controller
+          image: travel-quality:local
+          command: [python, -m, quality.worker, --evaluators, "0"]
+          envFrom:
+            - configMapRef: {name: quality-config}
+            - secretRef: {name: quality-runtime}
+            - secretRef: {name: quality-controller-secrets}
+          resources:
+            requests: {cpu: "500m", memory: "1Gi"}
+            limits: {cpu: "4", memory: "4Gi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            exec:
+              command: [python, -c, "from quality import store; store.rows('SELECT 1')"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - {name: artifacts, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: quality-artifacts}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: quality-artifacts
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 10Gi}

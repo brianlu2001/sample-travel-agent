@@ -1,0 +1,17 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!agent/
+!agent/**
+!quality/
+!quality/**
+!data/
+!data/**
+!datasets/
+!datasets/**
+!scripts/
+!scripts/**
+**/__pycache__/**
+**/*.pyc

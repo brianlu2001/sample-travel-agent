@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quality-config
+data:
+  PHOENIX_ENDPOINT: http://phoenix.phoenix.svc.cluster.local:6006
+  PHOENIX_PROJECT: travel-agent
+  ANTHROPIC_MODEL: claude-haiku-4-5
+  QUALITY_JUDGE_MODEL: claude-sonnet-4-6
+  QUALITY_STATE_DIR: /state
+  QUALITY_DB_POOL_SIZE: "4"
+  QUALITY_REQUIRE_POSTGRES: "true"
+  QUALITY_WINDOW: "20"
+  QUALITY_MIN_SAMPLES: "10"
+  QUALITY_THRESHOLD: "0.85"
+  QUALITY_GITHUB_REMOTE: https://github.com/brianlu2001/sample-travel-agent.git
+  # Configure a real relay in your cluster; localhost SMTP is only in the demo.
+  QUALITY_SMTP_HOST: smtp.example.com
+  QUALITY_SMTP_PORT: "587"
+  QUALITY_SMTP_STARTTLS: "true"
+  QUALITY_ALERT_EMAIL: travel-agent-dev@example.com

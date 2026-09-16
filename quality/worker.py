@@ -1,9 +1,12 @@
-"""Restartable local workers. Task failures retry with bounded backoff."""
+"""Restartable workers for local processes or pods; bounded retry and leases."""
 import argparse
 import base64
 import concurrent.futures
 import importlib
 import json
+import os
+import signal
+import threading
 import time
 
 import httpx
@@ -14,13 +17,46 @@ from quality.config import PHOENIX
 
 EXPORT_HTTP = httpx.Client(timeout=15)
 PHOENIX_CLIENT = Client(base_url=PHOENIX)
+STOP = threading.Event()
+
+
+def run_leased(job, lease_seconds):
+    """Keep long model calls leased while allowing other replicas to claim work.
+
+    Delivery remains at least once: a crash between an external side effect and
+    acknowledgment may replay it. Job keys and annotation identities deduplicate.
+    """
+    finished = threading.Event()
+    lost = threading.Event()
+    def heartbeat():
+        while not finished.wait(min(30, lease_seconds / 3)):
+            try:
+                if not store.renew(job, lease_seconds):
+                    lost.set()
+                    return
+            except Exception:
+                lost.set()
+                STOP.set()  # Drain this process; do not claim more jobs offline.
+                return
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    try:
+        dispatch(job)
+        if lost.is_set():
+            raise RuntimeError("Job lease lost; result acknowledgment withheld")
+    finally:
+        finished.set()
+        thread.join()
 
 
 def dispatch(job):
     payload = job["payload"]
     if job["kind"] == "trace":
+        headers = {"Content-Type": "application/x-protobuf"}
+        if os.getenv("PHOENIX_API_KEY"):
+            headers["Authorization"] = "Bearer " + os.environ["PHOENIX_API_KEY"]
         response = EXPORT_HTTP.post(PHOENIX + "/v1/traces", content=base64.b64decode(payload["otlp"]),
-                              headers={"Content-Type": "application/x-protobuf"}, timeout=15)
+                                    headers=headers, timeout=15)
         response.raise_for_status()
     elif job["kind"] == "arize_trace":
         from quality.arize_export import export
@@ -61,7 +97,7 @@ class TraceExportPending(Exception):
 def consume(kinds):
     last_monitor = 0
     last_checkpoint = 0
-    while True:
+    while not STOP.is_set():
         provider_paused = bool(store.setting("provider_block"))
         if "full_evaluation" in kinds and not provider_paused and time.time()-last_checkpoint >= 30:
             last_checkpoint = time.time()
@@ -92,12 +128,13 @@ def consume(kinds):
         if not available_kinds:
             time.sleep(1)
             continue
-        job = store.claim(available_kinds, lease_seconds=7200 if "repair" in available_kinds else 600)
+        lease_seconds = 7200 if "repair" in available_kinds else 600
+        job = store.claim(available_kinds, lease_seconds=lease_seconds)
         if job is None:
             time.sleep(0.3)
             continue
         try:
-            dispatch(job)
+            run_leased(job, lease_seconds)
             store.finish(job)
         except TraceExportPending:
             store.execute("UPDATE jobs SET state='pending',available=?,attempts=attempts-1,lease_until=NULL WHERE id=? AND owner=?",
@@ -117,6 +154,11 @@ def main():
     parser.add_argument("--evaluate-only", action="store_true")
     parser.add_argument("--export-only", action="store_true")
     args = parser.parse_args()
+    if args.evaluators < 0 or (args.evaluate_only and args.evaluators < 1):
+        parser.error("Evaluation workers need a positive concurrency; controllers may use zero")
+    STOP.clear()
+    signal.signal(signal.SIGTERM, lambda *_: STOP.set())
+    signal.signal(signal.SIGINT, lambda *_: STOP.set())
     store.init()
     # Load shared SDK integrations before worker threads request each other’s
     # partially initialized modules during a cold start.
@@ -129,7 +171,12 @@ def main():
         lanes = [("trace",)]
     print(f"Quality worker started with {args.evaluators} evaluation lanes", flush=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(lanes)) as pool:
-        list(pool.map(consume, lanes))
+        futures = [pool.submit(consume, lane) for lane in lanes]
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
+        finally:
+            STOP.set()
 
 
 if __name__ == "__main__":

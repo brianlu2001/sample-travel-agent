@@ -1,0 +1,28 @@
+# Optional overlay: requires KEDA and database access from its operator.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: quality-evaluators
+spec:
+  scaleTargetRef:
+    name: quality-evaluators
+  pollingInterval: 30
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: QUALITY_DATABASE_URL
+        # Count queued AND in-flight work so a busy worker is not scaled away.
+        # A provider outage pauses paid work instead of scaling a blocked queue.
+        query: >-
+          SELECT COUNT(*) FROM jobs WHERE kind='evaluate'
+          AND ((state='pending' AND available<=EXTRACT(EPOCH FROM NOW())) OR state='running')
+          AND NOT EXISTS (SELECT 1 FROM settings WHERE key='provider_block' AND value<>'null')
+        targetQueryValue: "2"

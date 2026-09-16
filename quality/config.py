@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 STATE = Path(os.getenv("QUALITY_STATE_DIR", str(ROOT / ".quality"))).resolve()
 DB = STATE / "quality.sqlite3"
+DATABASE_URL = os.getenv("QUALITY_DATABASE_URL", "")
 PHOENIX = os.getenv("PHOENIX_ENDPOINT", os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://127.0.0.1:6006")).rstrip("/")
 JUDGE_MODEL = os.getenv("QUALITY_JUDGE_MODEL", "claude-sonnet-4-6")
 REPAIR_MODEL = os.getenv("QUALITY_REPAIR_MODEL", JUDGE_MODEL)

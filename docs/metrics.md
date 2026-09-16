@@ -79,24 +79,19 @@ the execution/retry journal and incident state, not the authoritative live score
 | Privacy/error handling, counts and alerts | Programmatic redaction checks, error classification, pass-rate denominators, windows, threshold checks and deduplication. |
 | Human feedback | Separate human labels, never presented as LLM or programmatic judgments. |
 
-## Intermediate turns and a proposed hybrid
+## Intermediate turns and scope boundary
 
 **Implemented:** every user-visible turn is evaluated; trace history can filter by
 metric, label and evaluator version. The Conversation action lists earlier turns
 even when the latest response passes. Missing evaluations are pending, separate
 from unknown and not applicable. Completion can be explicitly selected as a diagnostic.
 
-**Proposed next:** keep the latest-turn outcome score over 20 conversations, and
-add a separate session review for avoidable repetition, lost constraints and
-user corrections. Run that review after inactivity/explicit completion, with early
-review after repeated failed turns. Evaluate the request known at each turn, never
-penalize an appropriate clarification for failing to answer a future request.
-
-Programmatic turn/tool-error/repeated-call counts can prioritize that review.
-They are signals, not proof of frustration. A new semantic conversation rubric
-needs labeled examples and an audit before it can trigger automatic repair.
-Keep expensive semantic judging asynchronous; pre-send hard checks are a separate
-product guardrail decision. Do not treat private model reasoning as user output.
+**Explicitly out of scope:** a separate conversation-review evaluator. The customer
+declined it to keep the demonstration simple and reusable across agent types.
+Retain per-turn evaluation and conversation inspection without adding a frustration
+score, session-specific repair trigger, or new orchestration service for session review.
+Evaluate the request known at each turn; do not impose future user requests on an
+earlier response. Turn count alone is not proof of frustration.
 
 Phoenix already groups these traces through `session.id`. See the official
 [session documentation](https://arize.com/docs/phoenix/tracing/llm-traces/sessions).

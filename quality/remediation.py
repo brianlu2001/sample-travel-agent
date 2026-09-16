@@ -165,11 +165,14 @@ def candidate_files(candidate, baseline_id):
 
 
 def credential():
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    if token:
+        return token
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
     process = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
                              text=True, capture_output=True, cwd=ROOT, timeout=20, env=env)
     values = dict(line.split("=", 1) for line in process.stdout.splitlines() if "=" in line)
-    return os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or values.get("password")
+    return values.get("password")
 
 
 REGRESSION_TEST = '''"""Regression checks attached to the quality-workflow proposal."""
@@ -218,7 +221,7 @@ def publish(repair_id, files, body, baseline_id, previous_files=None):
     token = credential()
     if not token:
         raise RuntimeError("github_credentials_unavailable")
-    remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
+    remote = os.getenv("QUALITY_GITHUB_REMOTE") or subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
     if not remote.startswith("https://github.com/"):
         raise RuntimeError("Unsupported origin; configure an HTTPS GitHub origin")
     repo = remote.removeprefix("https://github.com/").removesuffix(".git")

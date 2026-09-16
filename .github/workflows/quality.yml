@@ -16,7 +16,43 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           version: '0.12.15'
-      - run: uv sync --locked --extra dev
-      - run: uv run ruff check agent quality tests scripts
-      - run: uv run pytest -q
+      - run: uv sync --locked --extra dev --extra production
+      - run: uv run --no-sync ruff check agent quality tests scripts
+      - run: uv run --no-sync pytest -q
       # Paid benchmarks are explicit operator commands, never secret-bearing PR jobs.
+  postgres-and-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: quality_test
+          POSTGRES_PASSWORD: isolated_ci_only
+          POSTGRES_DB: quality_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U quality_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: '0.12.15'
+      - run: uv sync --locked --extra dev --extra production
+      - run: uv run --no-sync pytest -q tests/test_postgres.py
+        env:
+          TEST_POSTGRES_URL: postgresql://quality_test:isolated_ci_only@localhost:5432/quality_test
+      - run: kubectl kustomize deploy/kubernetes > /tmp/quality.yaml
+      - run: kubectl kustomize deploy/kubernetes-autoscaling > /tmp/quality-autoscaling.yaml
+      - run: docker build -t quality-ci .
+      - name: Check the actual image and shared database
+        run: >-
+          docker run --rm --network host
+          -e QUALITY_DATABASE_URL=postgresql://quality_test:isolated_ci_only@localhost:5432/quality_test
+          -e QUALITY_REQUIRE_POSTGRES=true
+          quality-ci python -c
+          "from quality import store; from quality.privacy import analyzer; store.init(); analyzer(); print(store.rows('SELECT 1 AS healthy'))"

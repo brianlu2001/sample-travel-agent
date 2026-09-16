@@ -175,6 +175,13 @@ Local recognizers can miss unusual personal data or over-redact. Production need
 
 ## Checks and documentation
 
+### Optional Kubernetes deployment
+
+The local demo remains unchanged. A container, shared PostgreSQL journal, separate
+evaluation workers/controller, and optional KEDA queue autoscaling are now provided.
+See [deployment setup and enterprise capacity limits](docs/deployment.md). A cluster
+is not required to use this demo; no million-request throughput is claimed.
+
 ```powershell
 uv run pytest -q
 uv run ruff check agent quality tests scripts
