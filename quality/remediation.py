@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import symtable
 import sys
 import time
 import uuid
@@ -167,7 +168,13 @@ def candidate_files(candidate, baseline_id):
     for start, end, replacement in sorted(replacements, reverse=True):
         lines[start:end] = [replacement.rstrip()+"\n"]
     tools_source = "".join(lines)
-    if any(isinstance(n, ast.Name) and n.id == "date" for source in candidate["functions"].values() for n in ast.walk(ast.parse(source))):
+    def needs_date(table):
+        return (any(s.get_name() == "date" and s.is_global() and s.is_referenced() for s in table.get_symbols())
+                or any(needs_date(child) for child in table.get_children()))
+
+    # A local `date` argument (including use inside a comprehension) does not
+    # need datetime.date. Only global references in generated functions do.
+    if any(needs_date(symtable.symtable(source, "<candidate>", "exec")) for source in candidate["functions"].values()):
         tools_source = "from datetime import date\n" + tools_source
     return {"agent/tools.py": tools_source, "agent/prompt.py": "SYSTEM_PROMPT = " + repr(candidate["prompt"]) + "\n"}
 

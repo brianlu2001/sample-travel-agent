@@ -39,27 +39,70 @@ and PR branches remain separate.
   review of actual failed response `8886e23f6f5441b7a7e6630301311eeb`. It is labeled
   separately and does not claim a groundedness threshold breach.
 - Both requests reference the same baseline `c074fc95e62f5bb6bc9caa084237ed8b`.
-  No proposal may start until that measurement finishes. Earlier sealed baselines
-  and rejected proposals remain intact; the serving agent was not modified.
+  It completed before either proposal started. Earlier sealed baselines and
+  rejected proposals remain intact; the serving agent was not modified.
 
-## Current pause and resume
+## Completed after credits were restored
 
-Anthropic returned HTTP 400 with an insufficient-credit-balance message. Paid
-work is paused. The baseline remains incomplete, and both repair requests remain
-`waiting_baseline`. Some current judgments are unknown because provider calls
-failed; they are not counted as passes. No new PR is claimed for these requests.
+The preserved baseline resumed successfully: 60 reference scenarios, two actual
+executions each. Its immutable results are correctness **114/120 (95%)**,
+groundedness **68/70 (97.1%)**, and topic relevance **120/120 (100%)**, with no
+unknown primary judgments. Groundedness excludes inapplicable responses. Two
+deterministic tool-contract failures remain in the original agent. Historical
+provider-error attempts are retained separately from the completed case results.
 
-After credits are restored:
+The baseline completion event woke both metric repair processes concurrently.
+Each proposed and checked its own candidate against 15 targeted development
+cases, including the actual incident prompts. Both passed independent tool
+invariants and artifact tests, with no tool-contract or privacy failures in their
+targeted experiments.
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.demo resume-provider
-```
+| Draft proposal | Targeted correctness | Targeted groundedness | Targeted relevance |
+|---|---:|---:|---:|
+| [Groundedness PR #3](https://github.com/brianlu2001/sample-travel-agent/pull/3) | 14/15 | 9/9 | 15/15 |
+| [Correctness PR #4](https://github.com/brianlu2001/sample-travel-agent/pull/4) | 15/15 | 8/8 | 15/15 |
 
-This resumes the existing baseline and unfinished judgments, reusing completed
-cases and scores. Baseline completion wakes both reserved repairs. A draft PR
-requires independent checks and its targeted experiment; human review controls
-merging and deployment. `sync-prs` confirms actual GitHub closures locally, or a
-signed webhook can perform that confirmation in a deployed environment.
+These are recorded LLM judgments on different development selections, **not
+full-set improvement claims**. Both requests are `awaiting_review`; their
+per-metric locks remain held. The two prompt proposals overlap and need human
+reconciliation and validation before being combined. Full candidate checkpoints
+remain subject to the daily cadence or manual full-evaluation button.
+
+### Review exposed a judge disagreement
+
+Both candidate flight answers still assert date-specific availability and then
+disclaim it. The LLM judge passed these answers. A separate Codex assistant review
+recorded this contradiction prominently in both draft PR descriptions and repair
+details without overwriting the original scores. This is **not human calibration**.
+Neither proposal should be approved as a verified fix on these scores alone.
+
+The evidence is candidate run `ca8b2a25f1f74507900ce9775f5d9d3c` for groundedness
+and `49c025ccbd164620a11edcc0f9658b24` for correctness. Local evidence is saved in
+`.quality/event_live_exercise/candidate-review-findings.json`. The next quality
+step is to calibrate the evaluator on this contradiction and revise the proposals;
+the serving agent is unchanged.
+
+CI also caught an unused date import in generated artifacts. The renderer now
+distinguishes a local date parameter from the global datetime helper. Both PR
+artifacts were corrected with unchanged candidate prompts/function bodies, then
+artifact tests and lint reran. This packaging correction did not rerun or replace
+their actual targeted results.
+
+## Operational state
+
+The live 20-conversation window is fully judged: correctness **18/20 (90%)**,
+groundedness **16/17 (94.1%)**, and relevance **20/20 (100%)**. Actual local SMTP
+delivery is recorded above. Normal API, Phoenix, evaluation, and two repair worker
+processes remain available; temporary extra evaluation capacity was stopped after
+the backlog cleared. No agent changes were merged or deployed.
+
+Phoenix CLI fetched both original incident traces, including the groundedness
+trace's agent, model and flight-tool spans. Concurrent repair leases were saved in
+`.quality/event_live_exercise/parallel-repairs-verified.json`.
+
+For another credit interruption, `python -m scripts.demo resume-provider` reuses
+the preserved baseline and unfinished judgments. `sync-prs` confirms actual GitHub
+closures locally, or a signed webhook performs that confirmation after deployment.
 
 See [architecture](architecture.md) and [deployment](deployment.md) for the workflow
 and remaining enterprise deployment limits.
