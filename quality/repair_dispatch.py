@@ -21,6 +21,32 @@ def active(source, metric):
     return rows[0] if rows else None
 
 
+def request_review(metric, run_ids):
+    """Explicit operator review of real failures, distinct from threshold alerts."""
+    if metric not in PRIMARY_METRICS or not run_ids:
+        raise ValueError('Select a primary metric and actual failed responses')
+    version = evaluator_version()
+    audit = store.setting('evaluator_audit', {})
+    if audit.get('status') != 'passed' or audit.get('evaluator_version') != version or not store.setting('auto_repair', False):
+        raise ValueError('Enable repairs with a passed current evaluator audit first')
+    run_ids = sorted(set(run_ids))
+    rows = [store.get_run(identifier) for identifier in run_ids]
+    if any(not row or row['source'] != 'live' or row['version'] != agent_version()
+           or not row['evaluation'] or row['evaluation']['version'] != version
+           or row['evaluation']['metrics'].get(metric,{}).get('label') != 'fail' for row in rows):
+        raise ValueError('Review requires current, genuinely failed live responses')
+    key = fingerprint(['requested-review',PROJECT,metric,version,run_ids])
+    identifier = uuid.uuid5(uuid.NAMESPACE_URL,key).hex
+    data = {'source':'live','trigger':'operator_review','metric':metric,'version':agent_version(),
+            'evaluator_version':version,'episode_id':identifier,'failing_run_ids':run_ids,
+            'window_run_ids':run_ids,'window_trace_ids':[row['event']['trace_id'] for row in rows],
+            'description':'Operator requested review of these recorded failures. This is not a rolling-window threshold alert.'}
+    now = time.time()
+    store.execute('INSERT OR IGNORE INTO incidents VALUES(?,?,?,?,?,?,NULL)',
+                  (identifier,key,'open',now,now,json.dumps(data)))
+    return schedule(store.rows('SELECT * FROM incidents WHERE id=?',(identifier,))[0])
+
+
 def schedule(incident):
     """A unique active-metric index is the cross-process lock, held through review."""
     data = json.loads(incident['payload']) if isinstance(incident['payload'], str) else incident['payload']

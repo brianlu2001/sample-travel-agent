@@ -162,6 +162,10 @@ processes. The Kubernetes profile uses two repair pods and PostgreSQL push wakeu
 To automate PR lifecycle updates outside loopback, configure a signed GitHub
 `pull_request` webhook at `/quality/github/webhook` and `QUALITY_GITHUB_WEBHOOK_SECRET`.
 The local `sync-prs` command confirms actual GitHub state without exposing this app.
+An explicit `python -m scripts.demo review-failures --metric groundedness --run-id RUN_ID`
+can investigate a recorded current failure when the rolling window is healthy.
+It uses the same baseline, metric lock and PR gates. The dashboard labels this as
+an operator-requested review; it does not invent a threshold breach or send a threshold email.
 
 ## Evaluation policy
 

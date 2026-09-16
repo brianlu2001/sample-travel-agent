@@ -130,7 +130,9 @@ def resume_provider():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["start", "stop", "enable-repair", "enable-checkpoints", "status", "retry-failed", "resume-repair", "revise-repair", "resume-provider", "sync-prs"])
+    parser.add_argument("action", choices=["start", "stop", "enable-repair", "enable-checkpoints", "status", "retry-failed", "resume-repair", "revise-repair", "resume-provider", "sync-prs", "review-failures"])
+    parser.add_argument('--metric', choices=('correctness','groundedness','topic_relevance'))
+    parser.add_argument('--run-id', action='append', default=[])
     args = parser.parse_args()
     store.init()
     if args.action == "start":
@@ -141,6 +143,9 @@ def main():
         enable_repair()
     elif args.action == "enable-checkpoints":
         enable_checkpoints()
+    elif args.action == 'review-failures':
+        from quality.repair_dispatch import request_review
+        print('Requested review: '+request_review(args.metric,args.run_id))
     elif args.action == 'sync-prs':
         from quality.repair_dispatch import sync_pr
         for row in store.rows("SELECT detail FROM repair_requests WHERE state='awaiting_review'"):

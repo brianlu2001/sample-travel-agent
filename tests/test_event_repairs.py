@@ -52,6 +52,20 @@ def test_live_evaluations_overtake_offline_backlog_without_losing_jobs():
     assert len(store.rows("SELECT id FROM jobs WHERE state='pending'"))==59
 
 
+def test_requested_review_requires_real_failure_and_is_not_threshold_email(monkeypatch):
+    evidence={'source':'live','version':agent_version(),'event':{'trace_id':'isolated'},
+              'evaluation':{'version':evaluator_version(),'metrics':{'groundedness':{'label':'pass'}}}}
+    monkeypatch.setattr(store,'get_run',lambda _:evidence)
+    with pytest.raises(ValueError):
+        dispatch.request_review('groundedness',['isolated'])
+    evidence['evaluation']['metrics']['groundedness']['label']='fail'
+    first=dispatch.request_review('groundedness',['isolated'])
+    assert dispatch.request_review('groundedness',['isolated'])==first
+    data=json.loads(store.rows('SELECT payload FROM incidents')[0]['payload'])
+    assert data['trigger']=='operator_review' and 'measurement' not in data
+    assert not store.rows("SELECT id FROM jobs WHERE kind='email'")
+
+
 def test_pending_pr_blocks_same_metric_even_across_incidents_then_terminal_releases():
     first = dispatch.schedule(incident('first'))
     dispatch.update(first,'awaiting_review',pr_url='https://github.com/example/repo/pull/1')
