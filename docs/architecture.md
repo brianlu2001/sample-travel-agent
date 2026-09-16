@@ -1,5 +1,8 @@
 # Proof-of-concept architecture
 
+See [event-workflow verification](event-workflow-verified.md) for the current
+observed trigger, SMTP receipt, parallel repair reservations and provider pause.
+
 ```mermaid
 flowchart LR
     U[Chat UI or POST /chat] --> A

@@ -111,6 +111,21 @@ def resume_provider():
     baseline = store.rows("SELECT * FROM benchmarks WHERE id=?", (baseline_id,))[0]
     if json.loads(baseline["manifest"])["evaluator_version"] != evaluator_version():
         raise RuntimeError("Evaluator changed; blocked baseline requires separate revalidation")
+    if block.get('workflow') == 'event_repairs':
+        with store.connection() as con:
+            con.execute("UPDATE benchmarks SET status='running' WHERE id=? AND status='provider_blocked'",(baseline_id,))
+            con.execute("UPDATE jobs SET state='pending',available=?,attempts=0,lease_until=NULL,owner=NULL,error=NULL "
+                        "WHERE kind IN ('evaluate','evaluate_live') AND state IN ('dead','pending') "
+                        "AND json_extract(payload,'$.run_id') IN (SELECT id FROM runs WHERE benchmark_id=? OR "
+                        "(source='live' AND json_extract(evaluation,'$.version')=?))",
+                        (time.time(),baseline_id,evaluator_version()))
+            con.execute("UPDATE jobs SET state='pending',available=?,attempts=0,lease_until=NULL,owner=NULL,error=NULL "
+                        "WHERE kind IN ('full_evaluation','repair_baseline') AND state IN ('dead','pending') AND json_extract(payload,'$.id')=?",
+                        (time.time(),baseline_id))
+        store.set_setting('provider_block',None)
+        start()
+        print('Resuming the preserved baseline and unfinished judgments. Waiting metric repairs retain their reservations.')
+        return
     with store.connection() as con:
         con.execute("UPDATE benchmarks SET status='running' WHERE id=? AND status='provider_blocked'", (baseline_id,))
         con.execute("UPDATE jobs SET state='pending',available=?,attempts=0,lease_until=NULL,owner=NULL "

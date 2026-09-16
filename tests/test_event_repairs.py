@@ -66,6 +66,23 @@ def test_requested_review_requires_real_failure_and_is_not_threshold_email(monke
     assert not store.rows("SELECT id FROM jobs WHERE kind='email'")
 
 
+def test_provider_resume_keeps_baseline_and_waiting_metric_reservations(monkeypatch):
+    from scripts import demo
+    identifier=dispatch.schedule(incident('a'))
+    store.execute("UPDATE repair_requests SET state='waiting_baseline',baseline_id='frozen' WHERE id=?",(identifier,))
+    manifest=json.dumps({'evaluator_version':evaluator_version()})
+    store.execute("INSERT INTO benchmarks VALUES('frozen','baseline',NULL,'provider_blocked',1,NULL,?,NULL,NULL,NULL)",(manifest,))
+    store.set_setting('provider_block',{'baseline_id':'frozen','workflow':'event_repairs'})
+    store.enqueue('full_evaluation','full:existing',{'id':'frozen'})
+    store.execute("UPDATE jobs SET state='dead' WHERE key='full:existing'")
+    monkeypatch.setattr(demo,'start',lambda:None)
+    demo.resume_provider()
+    assert store.setting('provider_block') is None
+    assert store.rows("SELECT status FROM benchmarks WHERE id='frozen'")[0]['status']=='running'
+    assert store.rows("SELECT state FROM jobs WHERE key='full:existing'")[0]['state']=='pending'
+    assert dispatch.active('live','correctness')['state']=='waiting_baseline'
+
+
 def test_pending_pr_blocks_same_metric_even_across_incidents_then_terminal_releases():
     first = dispatch.schedule(incident('first'))
     dispatch.update(first,'awaiting_review',pr_url='https://github.com/example/repo/pull/1')
