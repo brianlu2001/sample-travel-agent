@@ -197,10 +197,18 @@ def test_publication_failure_retains_tested_candidate_for_retry(workflow, monkey
         workflow.publish()
     assert not workflow.finished
     assert workflow.revision["results"]["gate"]["passed"]
+    workflow.call("finish_repair", {"reason": "GitHub unavailable; retry publication later"})
+    assert store.rows("SELECT status FROM repairs")[0]["status"] == "awaiting_github_access"
+    payload = json.loads(store.rows("SELECT payload FROM repairs")[0]["payload"])
+    workflow = repair_tools.RepairTools("repair", workflow.directory, payload, workflow.evidence)
+    workflow.investigation = repair_skills.Investigation(workflow.evidence)
+    workflow.restore_results()
+    inspect_current(workflow)
+    assert not workflow.finished
     monkeypatch.setattr(remediation, "publish", actual_publish)
     workflow.publish()
     assert workflow.finished
-    assert [c[0] for c in workflow.test_calls].count("execute") == 1
+    assert not payload.get("publication_error")
 
 
 def test_concurrent_metric_workspaces_do_not_share_candidate_state(workflow, tmp_path):

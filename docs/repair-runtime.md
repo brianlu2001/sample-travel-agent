@@ -157,3 +157,20 @@ The later [operator-triggered PR #3 replay](sdk-pr3-replay.md) exercised fresh S
 investigations, actual targeted experiments and a replacement PR proposal. That
 record distinguishes the SDK's activity from the remaining agent and evaluator
 quality limitations; it does not claim a new automatic live escalation.
+
+### Verification of the unified repair loop (September 16, 2026)
+
+The new single-session loop passes the isolated workflow tests, including two
+candidate revisions, gated publication, restart reuse and GitHub outage recovery.
+The full local suite passed 155 tests; six PostgreSQL-only tests require the CI
+service. These tests use scripted fixtures, excluded from production telemetry.
+
+A real checkpoint of the merged PR3 agent was started before a new SDK repair:
+`0aecd48209aa4c2c83de55c674d6c137`. Anthropic returned an explicit insufficient-credit
+error before evaluation completed. This checkpoint remains **provider_blocked**,
+unsealed and ineligible to authorize a repair. Successful responses and judgments
+are retained; failed provider executions are retained as traces but their unsealed
+case pointers are reset for retry. No new SDK repair or PR was claimed as successful.
+After credits are restored, `python -m scripts.demo resume-provider` resumes this
+measurement. A real SDK repair of supported development failures is still needed
+to verify the new tools together with the live model.

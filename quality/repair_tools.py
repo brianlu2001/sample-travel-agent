@@ -33,6 +33,10 @@ class RepairTools:
         self.evidence, self.prior = evidence, prior
         self.baseline_id = payload["baseline_id"]
         self.saved = payload.setdefault("sdk_workflow", {"configuration": configuration(), "revisions": []})
+        # A new host invocation is an explicit operational retry. Keep the
+        # measured candidate, but let the SDK retry a blocked GitHub operation.
+        if self.saved.get("status") == "awaiting_github_access":
+            self.saved.pop("outcome", None)
         self.investigation = None
 
     @property
@@ -210,7 +214,13 @@ class RepairTools:
         (self.directory / "pr-description.md").write_text(body, encoding="utf-8")
         (self.directory / "candidate.json").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
         self.save("awaiting_review")
-        self.payload["pr_url"] = publish(self.payload["root_repair_id"], files, body, self.baseline_id, previous_files)
+        try:
+            self.payload["pr_url"] = publish(self.payload["root_repair_id"], files, body, self.baseline_id, previous_files)
+        except Exception as error:
+            self.payload["publication_error"] = type(error).__name__
+            self.save("awaiting_github_access")
+            raise
+        self.payload.pop("publication_error", None)
         self.payload.update(store.setting("publication:"+self.payload["root_repair_id"], {}))
         self.saved["outcome"] = "draft_pr"
         self.save("pr_open")
@@ -259,6 +269,6 @@ class RepairTools:
                 raise ValueError("Explain why review is needed")
             self.saved["outcome"] = "needs_attention"
             self.payload["summary"] = safe_payload(arguments["reason"])
-            self.save("awaiting_human_evidence")
+            self.save("awaiting_github_access" if self.payload.get("publication_error") else "awaiting_human_evidence")
             return {"status": "needs_attention", "instruction": "Stop. No merge or quality success claimed."}
         raise ValueError("Unknown repair tool")
