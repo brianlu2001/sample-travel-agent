@@ -122,6 +122,14 @@ pass. The dashboard stop button prevents further scenario requests; an already
 started repair continues through validation. Held-out scenarios are never used as
 scenario-stream inputs or supplied to the repair agent.
 
+For a finite simulation with new user conversations, the same campaign runner also
+accepts `start(cases, stop_on_incident=False)` from `quality.scenario_stream`, where
+each case has a unique `id` and a `messages` list. It runs real agent calls under
+the `scenario` source and waits for Phoenix evaluation before the next conversation.
+This explicit mode finishes the supplied list while genuine incident/repair jobs
+run independently. The default development campaign still pauses on an incident.
+The previous campaign record is archived before a new campaign starts.
+
 ### Hosted tracing
 
 `ARIZE_SPACE_ID`, `ARIZE_API_KEY`, and `ARIZE_OTLP_ENDPOINT` in the ignored `.env`

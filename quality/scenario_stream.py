@@ -1,7 +1,7 @@
 """Paced real conversations, followed by the existing Phoenix incident workflow.
 
-Only development reference inputs are used. Each request is evaluated before the
-next scenario starts. No labels, outputs or delivery events are manufactured.
+Development reference inputs or operator-supplied conversations are used. Each
+conversation is evaluated before the next starts. Outputs are actual executions.
 """
 import json
 import time
@@ -25,13 +25,27 @@ def plan():
             for items in groups.values() if i < len(items)]
 
 
-def start():
+def start(cases=None, *, stop_on_incident=True):
     current = store.setting("scenario_campaign", {})
     if current.get("status") in ACTIVE:
         return current
+    if cases is not None:
+        if not cases or len({c['id'] for c in cases}) != len(cases) or any(
+            not c.get("messages") or any(not isinstance(m, str) or not m.strip() for m in c["messages"])
+            for c in cases
+        ):
+            raise ValueError("Provide distinct conversations with nonempty user messages")
+        from quality.privacy import safe_payload
+        cases = safe_payload(cases)
+        if not isinstance(cases, list):
+            raise ValueError("Conversation plan could not be redacted")
+    if current.get("id"):
+        store.set_setting("scenario_campaign:" + current["id"], current)
     current = {"id": uuid.uuid4().hex, "status": "running", "created": time.time(),
                "version": agent_version(), "evaluator_version": evaluator_version(),
-               "scenario_ids": plan(), "completed": 0, "interval_seconds": 15,
+               "scenario_ids": [c["id"] for c in cases] if cases is not None else plan(),
+               "custom_cases": cases, "stop_on_incident": stop_on_incident,
+               "completed": 0, "interval_seconds": 15,
                "next_at": time.time(), "last_run_ids": [],
                "note": "Real executions on synthetic development inputs; separate Phoenix rolling window."}
     store.set_setting("scenario_campaign", current)
@@ -60,7 +74,7 @@ def tick():
         return
     incidents = store.rows("SELECT * FROM incidents WHERE created>=? AND json_extract(payload,'$.source')='scenario' ORDER BY created",
                            (current["created"],))
-    if incidents:
+    if incidents and current.get("stop_on_incident", True):
         incident_ids = [i["id"] for i in incidents]
         repairs = store.rows("SELECT * FROM repairs ORDER BY created DESC")
         repairs = [r for r in repairs if r["incident_id"] in incident_ids]
@@ -107,10 +121,13 @@ def tick():
     if not set(current["last_run_ids"][-1:]).issubset(observed):
         return
     # A just-created incident must pause requests before we schedule another case.
-    if store.rows("SELECT id FROM incidents WHERE created>=? AND json_extract(payload,'$.source')='scenario'", (current["created"],)):
+    if current.get("stop_on_incident", True) and store.rows("SELECT id FROM incidents WHERE created>=? AND json_extract(payload,'$.source')='scenario'", (current["created"],)):
         return
     if current["completed"] >= len(current["scenario_ids"]):
-        save(current, status="exhausted", note="All development scenarios evaluated without a qualifying breach. No PR forced.")
+        if current.get("custom_cases") is not None:
+            save(current, status="complete", note="All requested conversations executed and evaluated; any repair workflow continues independently.")
+        else:
+            save(current, status="exhausted", note="All development scenarios evaluated without a qualifying breach. No PR forced.")
         return
     store.enqueue("scenario", f"scenario:{current['id']}:{current['completed']}",
                   {"campaign_id": current["id"], "index": current["completed"]})
@@ -132,7 +149,10 @@ def execute(payload):
         save(current, status="needs_attention", note="Scenario worker must restart to load the active agent.")
         return
     scenario_id = current["scenario_ids"][current["completed"]]
-    scenario = next(s for s in scenarios() if s["id"] == scenario_id and s["split"] == "development")
+    candidates = current.get("custom_cases")
+    if candidates is None:
+        candidates = [s for s in scenarios() if s["split"] == "development"]
+    scenario = next(s for s in candidates if s["id"] == scenario_id)
     save(current, in_flight=scenario_id)
     messages, run_ids, session = [], [], uuid.uuid4().hex
     for message in scenario["messages"]:

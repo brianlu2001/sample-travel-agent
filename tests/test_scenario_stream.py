@@ -61,6 +61,30 @@ def test_rejection_allows_one_distinct_revision_then_stops():
     assert len(store.rows("SELECT * FROM jobs WHERE kind='repair'")) == 1
 
 
+def test_custom_campaign_continues_after_incident_and_stops_at_requested_count(monkeypatch):
+    from quality.scenario_stream import start, tick
+    monkeypatch.setattr("quality.privacy.safe_payload", lambda value: value)
+    current = start([{"id": "custom-1", "messages": ["Plan a trip"]}], stop_on_incident=False)
+    store.execute("INSERT INTO incidents(id,fingerprint,status,created,updated,payload) VALUES(?,?,?,?,?,?)",
+                  ("flag", "flag", "open", time.time(), time.time(), json.dumps({"source": "scenario"})))
+    tick()
+    job = store.claim(("scenario",))
+    assert job and job["payload"]["campaign_id"] == current["id"]
+    store.finish(job)
+    current.update(completed=1)
+    store.set_setting("scenario_campaign", current)
+    tick()
+    assert store.setting("scenario_campaign")["status"] == "complete"
+    assert len(store.rows("SELECT * FROM jobs WHERE kind='scenario'")) == 1
+
+
+def test_custom_campaign_rejects_duplicate_conversation_ids():
+    from quality.scenario_stream import start
+    case = {"id": "same", "messages": ["Hello"]}
+    with pytest.raises(ValueError, match="distinct"):
+        start([case, case])
+
+
 def test_sender_receipt_only_after_actual_smtp_acceptance(monkeypatch):
     import asyncio
     import socket
