@@ -55,7 +55,9 @@ that same API also exercise the live pipeline.
 
 1. Preserve the flagged real conversations and trace IDs as diagnosis evidence.
 2. Measure a current-agent reference baseline if a compatible one is unavailable.
-3. Propose a minimal fix from the sanitized **live failures**.
+3. Start a Claude Agent SDK repair session: load relevant official Arize/Phoenix
+   skills, inspect actual Phoenix evidence, and propose a minimal fix from the
+   sanitized **live failures**.
 4. Validate the proposed functions and run up to 15 targeted development scenarios
    in Phoenix, including incident reproductions. Held-out cases stay out of diagnosis.
 5. Open/update a draft PR after hard checks pass. Full evaluation follows the daily
@@ -77,6 +79,11 @@ sealed; changing a judge does not rewrite history.
 The repair model cannot edit evaluators, thresholds, reference data, dependencies,
 or credentials. GitHub credentials use the existing credential helper or
 `GITHUB_TOKEN`/`GH_TOKEN`. Failed publication preserves the patch locally.
+
+The repair runtime uses Phoenix evaluation/tracing skills and Arize prompt
+optimization/experiment skills, with native SDK skill loading and Phoenix MCP
+tools. Each session has its own workspace and budget; existing workers execute
+validation and publish the proposal. [Runtime architecture and skill rationale](docs/repair-runtime.md).
 
 ### 3. Inspect and calibrate
 

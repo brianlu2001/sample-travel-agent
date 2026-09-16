@@ -60,8 +60,9 @@ Relevant files: `quality/evaluation.py`, `quality/answer_checks.py`,
 
 ## 3. Repeatable automation
 
-One restartable worker evaluates every recorded real chat and publishes annotations
-to Phoenix. It polls the latest live-chat window every five seconds. A qualifying
+Restartable workers evaluate every recorded real chat and publish annotations
+to Phoenix. Each acknowledged evaluation emits a monitoring event carrying its
+observed window; monitoring does not poll quality every five seconds. A qualifying
 breach raises a deduplicated incident, sends local SMTP email, and starts a repair
 investigation using those live failures. A current baseline is retained; hard checks
 and a targeted development experiment precede the draft PR. Full checkpoints run
@@ -86,8 +87,10 @@ Relevant files: `quality/worker.py`, `quality/phoenix_io.py`,
 | [Phoenix CLI skill](../.agents/skills/phoenix-cli/SKILL.md) | Inspect real recorded traces to compare agent/LLM/tool output rather than relying only on dashboard summaries. |
 | Phoenix CLI 1.18.2 | Ran `trace get ca3cbfb0075b6797dbf9488f4e553e88 --format raw --no-progress` against local Phoenix to inspect the reported failure. |
 
-The skills are development guidance; they do not create traces or substitute for
-actually executing and verifying the application.
+These development skills do not create traces or substitute for executing and
+verifying the application. The automated repair agent now also has a dedicated
+Claude Agent SDK runtime with four official skills, native skill loading, and
+scoped Phoenix tools. See [runtime skills, triggers and boundaries](repair-runtime.md).
 
 ### Further work for a real customer
 

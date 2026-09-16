@@ -56,3 +56,10 @@ jobs:
           -e QUALITY_REQUIRE_POSTGRES=true
           quality-ci python -c
           "from quality import store; from quality.privacy import analyzer; store.init(); analyzer(); print(store.rows('SELECT 1 AS healthy'))"
+      - name: Verify bundled repair skills and Claude runtime in the image
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp quality-ci python -c
+          "import subprocess, claude_agent_sdk; from pathlib import Path; from quality.repair_skills import catalog, read_document;
+          documents=[read_document(s['name'],d) for s in catalog() for d in s['documents']];
+          assert len(catalog())==4 and documents;
+          subprocess.run([str(Path(claude_agent_sdk.__file__).parent / '_bundled' / 'claude'),'--version'],check=True,timeout=30)"

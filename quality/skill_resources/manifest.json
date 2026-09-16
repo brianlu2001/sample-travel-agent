@@ -1,0 +1,88 @@
+{
+  "files": {
+    "phoenix-evals/SKILL.md": {
+      "sha256": "14777b241a5cd72003a12cb96187946d01fbf78287d0fbeba520183a6aeb2d1b",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-evals/SKILL.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-evals/references/error-analysis.md": {
+      "sha256": "c56f23d39975ca74cb5c1179b08d93a9d92e85b5a6afca835a5638ee14b23ffd",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-evals/references/error-analysis.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-evals/references/validation.md": {
+      "sha256": "de9db8977f195bd2c969022a592c17eb58e5faafc455117c45328d94e000e4af",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-evals/references/validation.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-evals/references/fundamentals-anti-patterns.md": {
+      "sha256": "3ebb6528d09eaf4bd6b7749eedb75597e527f79ea1abf3b151364c1b5504cb59",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-evals/references/fundamentals-anti-patterns.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-tracing/SKILL.md": {
+      "sha256": "11d0d27acf4efa600034c916e073970038f0fc4475673112c039996d0b7acc38",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-tracing/SKILL.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-tracing/references/fundamentals-overview.md": {
+      "sha256": "30cfdd28b69b7fb817388fa63923156715beee74f82536bcf32a0fec605e6f34",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-tracing/references/fundamentals-overview.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-tracing/references/span-tool.md": {
+      "sha256": "df587fd2dcd18afd8206695ca621e73c9df53388bc4b83b24ed0a65aa5e111db",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-tracing/references/span-tool.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-tracing/references/span-llm.md": {
+      "sha256": "c1a89340fe26b9c7b52afd73596fce84f0e3d27d787cb3208789e25f532885af",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-tracing/references/span-llm.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "phoenix-tracing/references/annotations-overview.md": {
+      "sha256": "8da51e48ee68db30953c225c01ffe4908a09496ed5be446dabd6122e75fd169f",
+      "source": "https://raw.githubusercontent.com/Arize-ai/phoenix/3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc/.agents/skills/phoenix-tracing/references/annotations-overview.md",
+      "revision": "3b503033ec9bb615c3d50e2c5b3cb1ad4d5ec2dc",
+      "repository": "https://github.com/Arize-ai/phoenix"
+    },
+    "arize-prompt-optimization/SKILL.md": {
+      "sha256": "4565a044e98a34c19e68125e46ef6951e636ac0326eb2d64fd9b8e4293f79bb8",
+      "source": "https://raw.githubusercontent.com/Arize-ai/arize-skills/92722c850c56542354ccbb499c83391240bfb948/skills/arize-prompt-optimization/SKILL.md",
+      "revision": "92722c850c56542354ccbb499c83391240bfb948",
+      "repository": "https://github.com/Arize-ai/arize-skills"
+    },
+    "arize-prompt-optimization/references/optimization-meta-prompt.md": {
+      "sha256": "fcc1100447c77d359c8113a48a1e5ecd15bd3e293805710d3744d66494f34241",
+      "source": "https://raw.githubusercontent.com/Arize-ai/arize-skills/92722c850c56542354ccbb499c83391240bfb948/skills/arize-prompt-optimization/references/optimization-meta-prompt.md",
+      "revision": "92722c850c56542354ccbb499c83391240bfb948",
+      "repository": "https://github.com/Arize-ai/arize-skills"
+    },
+    "arize-experiment/SKILL.md": {
+      "sha256": "4d6ba73f64d3ca7344d23077889ed979b0040035da61b38f6437a81a5ebc07f1",
+      "source": "https://raw.githubusercontent.com/Arize-ai/arize-skills/92722c850c56542354ccbb499c83391240bfb948/skills/arize-experiment/SKILL.md",
+      "revision": "92722c850c56542354ccbb499c83391240bfb948",
+      "repository": "https://github.com/Arize-ai/arize-skills"
+    }
+  },
+  "licenses": {
+    "phoenix": {
+      "declared_skill_license": "Apache-2.0",
+      "skill_license_file": "LICENSE-phoenix-skills-apache-2.0",
+      "upstream_repository_license": "Elastic-2.0",
+      "repository_license_file": "LICENSE-phoenix-repository"
+    },
+    "arize-skills": {
+      "spdx": "MIT",
+      "file": "LICENSE-arize-skills"
+    }
+  }
+}
