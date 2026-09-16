@@ -1,0 +1,2 @@
+# Separate environment preserves the assessed agent's Anthropic SDK version.
+arize-phoenix==20.12.0

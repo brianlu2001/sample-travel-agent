@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 dist/
+.phoenix-venv/
+.quality/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.env.*
+!.env.example

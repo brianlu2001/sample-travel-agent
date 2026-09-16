@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Travel Agent · Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f6f8; color: #182b38; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 850px; margin: auto; padding: 28px 20px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { font-size: 26px; margin: 0; letter-spacing: -.7px; }
+    .subtitle { margin: 4px 0 22px; color: #63717d; font-size: 14px; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; border: 1px solid #ccd6dc; border-radius: 10px; padding: 9px 15px; background: white; color: #182b38; }
+    button:hover { background: #eaf1f4; }
+    button:disabled { cursor: default; opacity: .55; }
+    button:focus-visible, textarea:focus-visible { outline: 3px solid #56aeb6; outline-offset: 3px; }
+    .panel { background: white; border: 1px solid #dde4e8; border-radius: 18px; overflow: hidden; box-shadow: 0 8px 35px #18384908; }
+    #messages { height: min(58vh, 580px); min-height: 280px; overflow-y: auto; padding: 24px; }
+    .welcome h2 { margin: 5px 0; font-size: 23px; }
+    .welcome p { color: #63717d; margin-top: 8px; }
+    .examples { display: grid; gap: 10px; margin-top: 24px; }
+    .examples button { text-align: left; font-size: 14px; }
+    .message { margin-bottom: 22px; }
+    .message strong { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: #63717d; margin-bottom: 6px; }
+    .message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .message.user { background: #edf6f5; border-radius: 12px; padding: 14px 18px; margin-left: 32px; }
+    #status { min-height: 26px; padding: 0 24px; color: #526771; font-size: 14px; }
+    #status.error { color: #b32e36; }
+    form { border-top: 1px solid #e5eaee; padding: 18px; display: flex; align-items: end; gap: 12px; }
+    textarea { resize: vertical; min-height: 60px; max-height: 180px; width: 100%; border: 1px solid #ccd6dc; border-radius: 10px; padding: 12px; color: inherit; }
+    #send { background: #16666d; color: white; border-color: #16666d; min-height: 48px; }
+    footer { text-align: center; font-size: 12px; color: #63717d; margin-top: 14px; }
+    @media (max-width: 540px) { main { padding: 16px 10px; } #messages { padding: 16px; } h1 { font-size: 23px; } form { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Travel Agent <span aria-hidden="true">↗</span></h1><button id="reset" type="button">New chat</button></header>
+    <p class="subtitle">A little help planning your next getaway. · <a href="/dashboard">Quality dashboard ↗</a></p>
+    <section class="panel" aria-label="Travel chat">
+      <div id="messages" role="log" aria-label="Conversation" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <h2>Where would you like to go?</h2>
+          <p>Ask about flights, hotels, weather, or a day-by-day itinerary.</p>
+          <div class="examples">
+            <button type="button">Find me a flight from New York to Miami on March 12, 2026.</button>
+            <button type="button">I need a hotel in Paris from June 10 to June 14, 2026.</button>
+            <button type="button">Plan a three-day trip to Tokyo.</button>
+          </div>
+        </div>
+      </div>
+      <div id="status" role="status"></div>
+      <form id="chat-form">
+        <textarea id="input" aria-label="Your message" placeholder="Tell me about your trip…" rows="2" required></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+    <footer>Demo · Travel results use sample data, not live availability.<br>Enter to send · Shift + Enter for a new line · Chats reset on page reload.</footer>
+  </main>
+  <script>
+    const messages = document.querySelector('#messages');
+    const input = document.querySelector('#input');
+    const status = document.querySelector('#status');
+    const send = document.querySelector('#send');
+    const reset = document.querySelector('#reset');
+    const form = document.querySelector('#chat-form');
+    const welcome = document.querySelector('#welcome');
+    let conversationId = null;
+    let busy = false;
+
+    function addMessage(role, text) {
+      welcome.remove();
+      const block = document.createElement('div');
+      block.className = `message ${role}`;
+      const label = document.createElement('strong');
+      label.textContent = role === 'user' ? 'You' : 'Travel Agent';
+      const body = document.createElement('p');
+      body.textContent = text;
+      block.append(label, body);
+      messages.append(block);
+      messages.scrollTop = messages.scrollHeight;
+      return block;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const message = input.value.trim();
+      if (!message || busy) return;
+      busy = true;
+      send.disabled = reset.disabled = input.disabled = true;
+      const userMessage = addMessage('user', message);
+      input.value = '';
+      status.className = '';
+      status.textContent = 'Planning your trip…';
+      try {
+        const response = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, conversation_id: conversationId }),
+        });
+        if (!response.ok) throw new Error(`Request failed (${response.status}). Check the server and API configuration, then try again.`);
+        const data = await response.json();
+        conversationId = data.conversation_id;
+        addMessage('assistant', data.reply);
+        status.textContent = '';
+      } catch (error) {
+        userMessage.remove();
+        input.value = message;
+        status.className = 'error';
+        status.textContent = error.message || 'Could not reach the agent. Please try again.';
+      } finally {
+        busy = false;
+        send.disabled = reset.disabled = input.disabled = false;
+        input.focus();
+      }
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    document.querySelectorAll('.examples button').forEach(button => {
+      button.addEventListener('click', () => { input.value = button.textContent; input.focus(); });
+    });
+    reset.addEventListener('click', () => {
+      if (busy) return;
+      conversationId = null;
+      messages.replaceChildren(welcome);
+      status.textContent = '';
+      input.value = '';
+      input.focus();
+    });
+  </script>
+</body>
+</html>

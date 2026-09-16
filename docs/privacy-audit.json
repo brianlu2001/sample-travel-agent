@@ -1,0 +1,7 @@
+{
+  "completed_at": "2026-09-15T21:12:05.873567+00:00",
+  "scope": "Feedback SQLite, serialized OTLP outbox, and local Phoenix SQLite content",
+  "strings_inspected": 159286,
+  "reference_PII_and_API_key_matches": {},
+  "limitation": "Checks known reference canaries and the configured agent API key; does not prove universal PII detection."
+}
