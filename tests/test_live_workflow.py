@@ -32,9 +32,43 @@ def test_monitor_reads_phoenix_annotations_and_excludes_old_judges(monkeypatch):
     fake = SimpleNamespace(spans=SimpleNamespace(get_spans=get_spans, get_span_annotations=lambda **kw: annotations))
     monkeypatch.setattr(phoenix_io, "client", lambda: fake)
     window = phoenix_io.live_window("agent-v", "current", 20, time.time()-86400)
-    assert captured["attributes"] == {"metadata.source": "live", "metadata.version": "agent-v"}
+    assert set(captured["trace_ids"]) == {"1", "2"}
     assert window[0]["evaluation"]["metrics"]["correctness"]["label"] == "fail"
     assert window[1]["evaluation"] is None
+
+
+def test_redacted_metadata_cannot_hide_scores_or_mix_versions(monkeypatch):
+    from quality import phoenix_io
+    now = time.time()
+    for identifier, source, version in [('chosen', 'live', 'current'), ('old', 'live', 'old'), ('offline', 'benchmark', 'current')]:
+        store.save_run({'id': identifier, 'created': now, 'source': source, 'version': version,
+                        'span_id': identifier, 'trace_id': identifier})
+    root = {'context': {'span_id': 'chosen', 'trace_id': 'chosen'},
+            'attributes': {'metadata.version': '[PERSON]', 'metadata.source': 'live'}}
+    def get_spans(**kwargs):
+        assert kwargs['trace_ids'] == ['chosen']
+        # Model Phoenix's exact-match filter: masked metadata would return nothing.
+        return [] if kwargs.get('attributes') else [root, {'context': {'span_id': 'old', 'trace_id': 'old'}}]
+    def get_annotations(**kwargs):
+        assert kwargs['spans'] == [root]
+        return [{'span_id': identifier, 'name': 'groundedness', 'metadata': {'evaluator_version': 'judge'},
+                 'result': {'label': label}} for identifier, label in [('chosen', 'fail'), ('old', 'pass')]]
+    monkeypatch.setattr(phoenix_io, 'client', lambda: SimpleNamespace(
+        spans=SimpleNamespace(get_spans=get_spans, get_span_annotations=get_annotations)))
+    window = phoenix_io.live_window('current', 'judge', 20, now-86400)
+    assert len(window) == 1
+    assert window[0]['evaluation']['metrics']['groundedness']['label'] == 'fail'
+
+
+def test_trace_and_span_identity_must_both_match(monkeypatch):
+    from quality import phoenix_io
+    now = time.time()
+    store.save_run({'id': 'run', 'created': now, 'source': 'live', 'version': 'agent',
+                    'trace_id': 'trace', 'span_id': 'span'})
+    def wrong_trace(**kwargs):
+        return [{'context': {'trace_id': 'other-trace', 'span_id': 'span'}}]
+    monkeypatch.setattr(phoenix_io, 'client', lambda: SimpleNamespace(spans=SimpleNamespace(get_spans=wrong_trace)))
+    assert phoenix_io.live_window('agent', 'judge', 20, now-86400)[0]['evaluation'] is None
 
 
 def test_window_uses_latest_turn_per_conversation_including_unexported(monkeypatch):

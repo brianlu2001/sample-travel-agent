@@ -27,17 +27,23 @@ def live_window(version, evaluation_version, limit, cutoff, source="live"):
     if not recorded:
         return []
     events = {r["id"]: json.loads(r["event"]) for r in recorded}
+    expected_spans = {e["span_id"]: e["trace_id"] for e in events.values()}
+    # Source/version are already selected by the journal. Redaction can mask a
+    # version hash in exported metadata, so it must not be an additional join key.
+    # Native trace/span IDs survive redaction and identify the exact executions.
     spans = client().spans.get_spans(
         project_identifier=PROJECT, parent_id="null", span_kind="AGENT",
-        attributes={"metadata.source": source, "metadata.version": version},
         trace_ids=[e["trace_id"] for e in events.values()],
         start_time=datetime.fromtimestamp(cutoff, timezone.utc), limit=limit, timeout=5)
+    spans = [span for span in spans if (context := span.get("context", {})).get("span_id") in expected_spans
+             and expected_spans[context["span_id"]] == context.get("trace_id")]
+    matched_ids = {span["context"]["span_id"] for span in spans}
     annotations = client().spans.get_span_annotations(
         spans=spans, project_identifier=PROJECT,
         include_annotation_names=list(METRICS), limit=limit*len(METRICS), timeout=5) if spans else []
     scores = {}
     for annotation in annotations:
-        if (annotation.get("metadata") or {}).get("evaluator_version") == evaluation_version:
+        if annotation["span_id"] in matched_ids and (annotation.get("metadata") or {}).get("evaluator_version") == evaluation_version:
             scores.setdefault(annotation["span_id"], {})[annotation["name"]] = annotation["result"]
     return [{"id": r["id"], "trace_id": events[r["id"]]["trace_id"],
              "conversation_id": events[r["id"]].get("conversation_id", r["id"]),

@@ -42,6 +42,9 @@ Phoenix evaluators assess its final answer asynchronously. The dashboard and
 monitor read current warning scores from **Phoenix span annotations**. The dashboard refreshes every
 five seconds; monitoring runs on acknowledged evaluation events, without a quality-poll timer.
 Workers prioritize live judgments over queued offline benchmark evaluations.
+Phoenix scores are joined using the journal's exact trace/span IDs after selecting the
+agent version and traffic source. Exported metadata may be redacted, so a masked version
+hash cannot hide completed evaluations. Evaluator versions are still matched explicitly.
 
 The live window holds the latest **20 conversations within 24 hours**, separated by
 agent and evaluator version. After **10 applicable judgments** for any of the three primary
