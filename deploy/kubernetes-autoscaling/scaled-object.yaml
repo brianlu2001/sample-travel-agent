@@ -22,7 +22,7 @@ spec:
         # Count queued AND in-flight work so a busy worker is not scaled away.
         # A provider outage pauses paid work instead of scaling a blocked queue.
         query: >-
-          SELECT COUNT(*) FROM jobs WHERE kind='evaluate'
+          SELECT COUNT(*) FROM jobs WHERE kind IN ('evaluate','evaluate_live')
           AND ((state='pending' AND available<=EXTRACT(EPOCH FROM NOW())) OR state='running')
           AND NOT EXISTS (SELECT 1 FROM settings WHERE key='provider_block' AND value<>'null')
         targetQueryValue: "2"

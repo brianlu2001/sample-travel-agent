@@ -39,6 +39,19 @@ def test_duplicate_deliveries_and_containers_reserve_one_request_per_metric():
     assert len(store.rows("SELECT * FROM jobs WHERE kind='repair'"))==2
 
 
+def test_live_evaluations_overtake_offline_backlog_without_losing_jobs():
+    from quality.worker import claim_job
+    for i in range(60):
+        store.enqueue('evaluate','offline:'+str(i),{'run_id':str(i)})
+    store.save_run({'id':'live-test','created':time.time(),'source':'live','version':agent_version(),'privacy_ok':True})
+    first=claim_job(('evaluate_live','evaluate'),600)
+    assert first['payload']['run_id']=='live-test'
+    store.finish(first)
+    second=claim_job(('evaluate_live','evaluate'),600)
+    assert second['key']=='offline:0'
+    assert len(store.rows("SELECT id FROM jobs WHERE state='pending'"))==59
+
+
 def test_pending_pr_blocks_same_metric_even_across_incidents_then_terminal_releases():
     first = dispatch.schedule(incident('first'))
     dispatch.update(first,'awaiting_review',pr_url='https://github.com/example/repo/pull/1')
@@ -134,6 +147,42 @@ def test_configuration_change_does_not_strand_waiting_metric(monkeypatch):
     with pytest.raises(ValueError):
         dispatch.baseline(payload)
     assert dispatch.active('live','correctness') is None
+
+
+def test_full_baseline_completing_during_reservation_wakes_request(monkeypatch):
+    from quality import remediation,benchmarks
+    identifier=dispatch.schedule(incident('a'))
+    monkeypatch.setattr(dispatch,'compatible_baseline',lambda:None)
+    monkeypatch.setattr(remediation,'live_evidence',lambda _: [{'run_id':'isolated'}])
+    store.enqueue('full_evaluation','full:existing',{'id':'existing','candidate':None,'configuration':benchmarks.configuration()})
+    store.execute("INSERT INTO benchmarks VALUES('existing','baseline',NULL,'complete',1,2,'{}','{}',NULL,NULL)")
+    dispatch.execute(identifier)
+    assert store.rows('SELECT state FROM repair_requests')[0]['state']=='queued'
+    assert len(store.rows("SELECT * FROM jobs WHERE key LIKE 'baseline-ready:%'"))==1
+
+
+def test_operational_retry_cannot_compete_with_newer_active_request():
+    first=dispatch.schedule(incident('a'))
+    dispatch.update(first,'failed')
+    second=dispatch.schedule(incident('b'))
+    assert dispatch.retry_failed()==0
+    dispatch.update(second,'rejected')
+    assert dispatch.retry_failed()==1
+    assert dispatch.active('live','correctness')['id']==first
+    assert store.rows('SELECT state FROM repair_requests WHERE id=?',(second,))[0]['state']=='rejected'
+
+
+def test_evaluator_revision_does_not_bypass_pending_metric_lock(monkeypatch):
+    first=dispatch.schedule(incident('a'))
+    dispatch.update(first,'awaiting_review')
+    monkeypatch.setattr(dispatch,'evaluator_version',lambda:'new-judge')
+    store.set_setting('evaluator_audit',{'status':'passed','evaluator_version':'new-judge'})
+    newer=incident('b')
+    payload=json.loads(newer['payload'])
+    payload['evaluator_version']='new-judge'
+    newer['payload']=json.dumps(payload)
+    assert dispatch.schedule(newer)==first
+    assert len(store.rows('SELECT * FROM repair_requests'))==1
 
 
 def test_recovery_and_rebreach_preserve_pending_pr_evidence(monkeypatch):

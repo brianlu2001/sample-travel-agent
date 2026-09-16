@@ -199,7 +199,8 @@ def save_run(event):
         con.execute("INSERT INTO runs(id,created,source,version,benchmark_id,scenario_id,event) VALUES(?,?,?,?,?,?,?)",
                     (event["id"], event["created"], event["source"], event["version"], event.get("benchmark_id"),
                      event.get("scenario_id"), json.dumps(event, ensure_ascii=False)))
-        enqueue("evaluate", "evaluate:" + event["id"], {"run_id": event["id"]}, con)
+        kind = 'evaluate_live' if event['source'] == 'live' else 'evaluate'
+        enqueue(kind, "evaluate:" + event["id"], {"run_id": event["id"]}, con)
         if not event.get("privacy_ok", True):
             # A real redaction failure is significant immediately; no sample warmup.
             incident_id = uuid.uuid4().hex

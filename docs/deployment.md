@@ -55,6 +55,10 @@ the judge model and does not replace Phoenix.
 | CI | Real PostgreSQL concurrency/recovery tests, immutable baseline checks, manifest rendering and an actual Linux image build/smoke test. |
 
 Workers share PostgreSQL instead of mounting a SQLite file across pods.
+Workers claim `evaluate_live` before offline `evaluate` jobs, so a full benchmark
+backlog cannot occupy future claims ahead of live traffic. In-flight judge calls
+are not interrupted. Sustained live saturation still needs provider budgets and
+dedicated offline capacity; prioritization is not a latency guarantee.
 `QUALITY_REQUIRE_POSTGRES=true` rejects a missing database URL. The SQL adapter is
 limited to this application's internal statements, not arbitrary user SQL.
 

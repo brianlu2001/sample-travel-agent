@@ -41,6 +41,7 @@ Use the chat UI normally. Each completed turn produces a real OpenInference trac
 Phoenix evaluators assess its final answer asynchronously. The dashboard and
 monitor read scores from **Phoenix span annotations**. The dashboard refreshes every
 five seconds; monitoring runs on acknowledged evaluation events, without a quality-poll timer.
+Workers prioritize live judgments over queued offline benchmark evaluations.
 
 The live window holds the latest **20 conversations within 24 hours**, separated by
 agent and evaluator version. After **10 applicable judgments** for any of the three primary

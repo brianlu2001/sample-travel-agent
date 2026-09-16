@@ -75,7 +75,7 @@ def dispatch(job):
             # already recovered window when it finally consumes this event.
             window = current_window(event['source'], event['version'], evaluation_version=event['evaluation_version'])
             store.enqueue('monitor', 'evaluation-ready:'+job['key'], {**event,'window_snapshot':window})
-    elif job["kind"] == "evaluate":
+    elif job["kind"] in ("evaluate", "evaluate_live"):
         from quality.evaluation import evaluate_run
         evaluate_run(payload["run_id"])
     elif job["kind"] == "scenario":
@@ -120,6 +120,14 @@ def consume(kinds):
         wakeup.close()
 
 
+def claim_job(kinds, lease_seconds):
+    if 'evaluate_live' in kinds:
+        live = store.claim(('evaluate_live',), lease_seconds=lease_seconds)
+        if live:
+            return live
+    return store.claim(kinds, lease_seconds=lease_seconds)
+
+
 def _consume(kinds, wakeup):
     last_checkpoint = 0
     while not STOP.is_set():
@@ -138,12 +146,12 @@ def _consume(kinds, wakeup):
             except Exception as error:
                 store.set_setting("scenario_runner_error", {"at": time.time(), "error_type": type(error).__name__})
                 time.sleep(3)
-        available_kinds = tuple(k for k in kinds if not provider_paused or k not in ("evaluate", "scenario", "repair", "repair_baseline", "full_evaluation"))
+        available_kinds = tuple(k for k in kinds if not provider_paused or k not in ("evaluate", "evaluate_live", "scenario", "repair", "repair_baseline", "full_evaluation"))
         if not available_kinds:
             time.sleep(1)
             continue
         lease_seconds = 7200 if any(k in available_kinds for k in ('repair','repair_baseline','full_evaluation')) else 600
-        job = store.claim(available_kinds, lease_seconds=lease_seconds)
+        job = claim_job(available_kinds, lease_seconds)
         if job is None:
             wakeup.wait(STOP)
             continue
@@ -188,7 +196,7 @@ def main():
         importlib.import_module(module)
     from quality.privacy import analyzer
     analyzer()  # Fail before consuming jobs if the redaction model is unavailable.
-    lanes = ([] if args.evaluate_only else [("trace",), ("arize_trace",), ("annotations",), ("monitor", "email", "pr_lifecycle"), ("repair_baseline", "full_evaluation"), ("scenario",)]) + [("evaluate",)] * args.evaluators
+    lanes = ([] if args.evaluate_only else [("trace",), ("arize_trace",), ("annotations",), ("monitor", "email", "pr_lifecycle"), ("repair_baseline", "full_evaluation"), ("scenario",)]) + [("evaluate_live","evaluate")] * args.evaluators
     if not args.evaluate_only and not args.no_repairs:
         lanes += [('repair',)] * args.repairers
     if args.repair_only:
