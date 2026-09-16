@@ -97,6 +97,10 @@ def run():
     target.parent.mkdir(exist_ok=True)
     target.write_text(json.dumps(report, indent=2), encoding="utf-8")
     store.set_setting("evaluator_audit", {k:v for k,v in report.items() if k != "results"})
+    if report['status'] == 'passed':
+        from quality.config import agent_version
+        store.enqueue('monitor', 'audit-passed:'+version+':'+str(report['at']),
+                      {'source':'live','version':agent_version(),'evaluation_version':version})
     print(json.dumps({k:v for k,v in report.items() if k != "results"}), flush=True)
 
 

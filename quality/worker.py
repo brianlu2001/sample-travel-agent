@@ -67,6 +67,14 @@ def dispatch(job):
         if pending_exports[0]["n"]:
             raise TraceExportPending()
         PHOENIX_CLIENT.spans.log_span_annotations(span_annotations=payload["annotations"], sync=True)
+        event = payload.get('evaluation_event')
+        if event and event.get('source') in ('live','scenario'):
+            from quality.monitoring import current_window
+            # Capture the actual acknowledged Phoenix window at delivery time.
+            # A busy monitor must not miss a brief breach by reading a later,
+            # already recovered window when it finally consumes this event.
+            window = current_window(event['source'], event['version'], evaluation_version=event['evaluation_version'])
+            store.enqueue('monitor', 'evaluation-ready:'+job['key'], {**event,'window_snapshot':window})
     elif job["kind"] == "evaluate":
         from quality.evaluation import evaluate_run
         evaluate_run(payload["run_id"])
@@ -74,12 +82,15 @@ def dispatch(job):
         from quality.scenario_stream import execute
         execute(payload)
     elif job["kind"] == "monitor":
-        from quality.monitoring import monitor
-        monitor(**payload)
+        from quality.monitoring import evaluation_ready
+        evaluation_ready(payload)
     elif job["kind"] == "email":
         from quality.mailbox import send_alert
         send_alert(payload, job["key"])
     elif job["kind"] == "repair":
+        if payload.get('request_id'):
+            from quality.repair_dispatch import execute
+            return execute(payload['request_id'])
         from quality.remediation import repair, repair_live_incident
         if payload.get("live"):
             repair_live_incident(payload["incident_id"])
@@ -88,6 +99,12 @@ def dispatch(job):
     elif job["kind"] == "full_evaluation":
         from quality.full_evaluation import execute
         execute(payload)
+    elif job['kind'] == 'repair_baseline':
+        from quality.repair_dispatch import baseline
+        baseline(payload)
+    elif job['kind'] == 'pr_lifecycle':
+        from quality.repair_dispatch import sync_pr
+        sync_pr(payload['pr_url'])
 
 
 class TraceExportPending(Exception):
@@ -95,7 +112,15 @@ class TraceExportPending(Exception):
 
 
 def consume(kinds):
-    last_monitor = 0
+    from quality.queue_notifications import Wakeup
+    wakeup = Wakeup()
+    try:
+        _consume(kinds, wakeup)
+    finally:
+        wakeup.close()
+
+
+def _consume(kinds, wakeup):
     last_checkpoint = 0
     while not STOP.is_set():
         provider_paused = bool(store.setting("provider_block"))
@@ -113,25 +138,14 @@ def consume(kinds):
             except Exception as error:
                 store.set_setting("scenario_runner_error", {"at": time.time(), "error_type": type(error).__name__})
                 time.sleep(3)
-        if "monitor" in kinds and store.setting("monitor_enabled", True) and time.time()-last_monitor >= 5:
-            last_monitor = time.time()
-            try:
-                from quality.config import agent_version
-                from quality.monitoring import monitor
-                version = store.setting("serving_agent", {}).get("version", agent_version())
-                monitor("live", version)
-                if store.setting("scenario_campaign"):
-                    monitor("scenario", version)
-            except Exception as error:
-                store.set_setting("live_monitor", {"status": "unavailable", "at": time.time(), "error_type": type(error).__name__})
-        available_kinds = tuple(k for k in kinds if not provider_paused or k not in ("evaluate", "scenario", "repair", "full_evaluation"))
+        available_kinds = tuple(k for k in kinds if not provider_paused or k not in ("evaluate", "scenario", "repair", "repair_baseline", "full_evaluation"))
         if not available_kinds:
             time.sleep(1)
             continue
-        lease_seconds = 7200 if "repair" in available_kinds else 600
+        lease_seconds = 7200 if any(k in available_kinds for k in ('repair','repair_baseline','full_evaluation')) else 600
         job = store.claim(available_kinds, lease_seconds=lease_seconds)
         if job is None:
-            time.sleep(0.3)
+            wakeup.wait(STOP)
             continue
         try:
             run_leased(job, lease_seconds)
@@ -140,11 +154,14 @@ def consume(kinds):
             store.execute("UPDATE jobs SET state='pending',available=?,attempts=attempts-1,lease_until=NULL WHERE id=? AND owner=?",
                           (time.time()+5, job["id"], job["owner"]))
         except Exception as error:
+            if job['kind']=='repair' and job['payload'].get('request_id'):
+                from quality.repair_dispatch import update
+                update(job['payload']['request_id'],'failed',error_type=type(error).__name__)
             if isinstance(error, ImportError):
                 from quality.privacy import safe_payload
                 store.set_setting("worker_import_error", {"at": time.time(), "kind": job["kind"],
                     "detail": safe_payload(str(error))})
-            store.fail(job, error, max_attempts=1 if job["kind"] in ("repair", "scenario", "full_evaluation") else 5)
+            store.fail(job, error, max_attempts=1 if job["kind"] in ("repair", "repair_baseline", "scenario", "full_evaluation") else 5)
             print(json.dumps({"job": job["id"], "kind": job["kind"], "error_type": type(error).__name__, "attempt": job["attempts"]}), flush=True)
 
 
@@ -153,9 +170,14 @@ def main():
     parser.add_argument("--evaluators", type=int, default=3)
     parser.add_argument("--evaluate-only", action="store_true")
     parser.add_argument("--export-only", action="store_true")
+    parser.add_argument('--repair-only', action='store_true')
+    parser.add_argument('--repairers', type=int, default=2)
+    parser.add_argument('--no-repairs', action='store_true')
     args = parser.parse_args()
     if args.evaluators < 0 or (args.evaluate_only and args.evaluators < 1):
         parser.error("Evaluation workers need a positive concurrency; controllers may use zero")
+    if args.repairers < 1 or sum((args.evaluate_only,args.export_only,args.repair_only)) > 1:
+        parser.error('Choose one worker role and a positive repair concurrency')
     STOP.clear()
     signal.signal(signal.SIGTERM, lambda *_: STOP.set())
     signal.signal(signal.SIGINT, lambda *_: STOP.set())
@@ -166,7 +188,11 @@ def main():
         importlib.import_module(module)
     from quality.privacy import analyzer
     analyzer()  # Fail before consuming jobs if the redaction model is unavailable.
-    lanes = ([] if args.evaluate_only else [("trace",), ("arize_trace",), ("annotations",), ("monitor", "email"), ("repair", "full_evaluation"), ("scenario",)]) + [("evaluate",)] * args.evaluators
+    lanes = ([] if args.evaluate_only else [("trace",), ("arize_trace",), ("annotations",), ("monitor", "email", "pr_lifecycle"), ("repair_baseline", "full_evaluation"), ("scenario",)]) + [("evaluate",)] * args.evaluators
+    if not args.evaluate_only and not args.no_repairs:
+        lanes += [('repair',)] * args.repairers
+    if args.repair_only:
+        lanes = [('repair',)] * args.repairers
     if args.export_only:
         lanes = [("trace",)]
     print(f"Quality worker started with {args.evaluators} evaluation lanes", flush=True)

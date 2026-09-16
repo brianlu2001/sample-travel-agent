@@ -7,7 +7,7 @@ resources:
   - api.yaml
   - workers.yaml
 # Replace with your registry image digest before applying. Never reuse this tag
-# for different code: all three deployments must use one measured image version.
+# for different code: all four deployments must use one measured image version.
 images:
   - name: travel-quality
     newName: travel-quality

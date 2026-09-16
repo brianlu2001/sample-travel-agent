@@ -55,8 +55,7 @@ kind: Deployment
 metadata:
   name: quality-controller
 spec:
-  # Singleton owns monitoring, exports, SMTP, repair and full checkpoints.
-  # Recreate avoids concurrent schedulers and writers to the artifact volume.
+  # Singleton consumes monitoring events, exports, SMTP and shared baselines.
   replicas: 1
   strategy: {type: Recreate}
   selector:
@@ -75,7 +74,7 @@ spec:
       containers:
         - name: controller
           image: travel-quality:local
-          command: [python, -m, quality.worker, --evaluators, "0"]
+          command: [python, -m, quality.worker, --evaluators, "0", --no-repairs]
           envFrom:
             - configMapRef: {name: quality-config}
             - secretRef: {name: quality-runtime}
@@ -102,11 +101,70 @@ spec:
         - name: tmp
           emptyDir: {}
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quality-repairs
+spec:
+  # Different metrics can run concurrently. PostgreSQL enforces one active
+  # investigation per metric, including the whole human-review interval.
+  replicas: 2
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: quality-repairs}
+  template:
+    metadata:
+      labels: {app: quality-repairs}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 7200
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: repair
+          image: travel-quality:local
+          command: [python, -m, quality.worker, --repair-only, --repairers, "1"]
+          envFrom:
+            - configMapRef: {name: quality-config}
+            - secretRef: {name: quality-runtime}
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: quality-controller-secrets
+                  key: GITHUB_TOKEN
+          resources:
+            requests: {cpu: "500m", memory: "1Gi"}
+            limits: {cpu: "2", memory: "3Gi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            exec:
+              command: [python, -c, "from quality import store; store.rows('SELECT 1')"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - {name: artifacts, mountPath: /state}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: quality-artifacts}
+        - name: tmp
+          emptyDir: {}
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: quality-artifacts
 spec:
-  accessModes: [ReadWriteOnce]
+  # Requires an RWX-capable storage class; all pods see /state at the same path.
+  # Every candidate and experiment writes to its own immutable UUID directory.
+  accessModes: [ReadWriteMany]
   resources:
     requests: {storage: 10Gi}

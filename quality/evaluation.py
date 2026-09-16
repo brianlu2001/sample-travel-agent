@@ -10,7 +10,7 @@ from quality import store
 from quality.answer_checks import evaluation_input
 from quality.config import JUDGE_MODEL, ROOT, file_hash, fingerprint
 from quality.privacy import safe_payload
-from quality.profiles.travel import POLICY, RUBRICS, conversation_references, fixtures, validate_tools
+from quality.profiles.travel import POLICY, RUBRICS, conversation_references, evaluation_catalog, validate_tools
 from quality.tracing import ids, set_io, setup
 
 
@@ -41,6 +41,9 @@ def classifiers():
             "check rules out missing numbered days, but does not prove overall correctness. "
             "The visible conversation ends at this request; never assume future user requests or impose a reference scenario final goal. "
             "Assistant offers are not user requests. Previous assistant messages are context, not authoritative facts. "
+            "For a tool lookup, independent_reference is the authoritative result for those exact arguments. "
+            "Weather references already contain the date-adjusted Fahrenheit measurements; never substitute "
+            "a raw catalog base temperature or compute a second adjustment. "
             "Internal itinerary drafts are not authoritative facts: the agent may add suggested days "
             "and activities. Score the final deliverable, not an internal draft.\n"
             "POLICY:\n" + ("Travel planning is the role. Factual accuracy, evidence support and completeness are scored separately; do not penalize them for topic_relevance." if name == "topic_relevance" else POLICY) + "\nRUBRIC:\n" + rubric +
@@ -70,7 +73,7 @@ def assess_event(event, run_id, previous_evaluation=None, assessment_source="eva
     diagnostics, evidence = validate_tools(event["tools"])
     execution, references = evaluation_input(event, evidence)
     reference = {"authoritative_facts": references + conversation_references(event),
-                 "fixture_catalog": fixtures(),
+                 "fixture_catalog": evaluation_catalog(),
                  "data_contract": "Static travel fixture evidence; no live inventory. Generic itinerary suggestions do not require tool or fixture support."}
     result = {"version": evaluator_version(), "judge_model": JUDGE_MODEL, "started": time.time(),
               "metrics": {}, "tool_diagnostics": diagnostics,
@@ -138,9 +141,11 @@ def evaluate_run(run_id):
                         "result": {k: metric[k] for k in ("label", "score", "explanation")},
                         "metadata": {"evaluator_version": result["version"], "judge_model": JUDGE_MODEL}}
                        for name, metric in result["metrics"].items()]
-        store.enqueue("annotations", "annotations:" + run_id + ":" + str(result["started"]), {"annotations": annotations}, con)
-        # Monitoring reads Phoenix annotations after export; offline experiments
-        # never open live incidents. The worker polls Phoenix between deliveries.
+        event_payload = {"run_id": run_id, "source": event["source"], "version": event["version"],
+                         "evaluation_version": result["version"]}
+        store.enqueue("annotations", "annotations:" + run_id + ":" + str(result["started"]),
+                      {"annotations": annotations, "evaluation_event": event_payload}, con)
+        # Export acknowledgment emits a durable event. No periodic quality polling.
     if any(r.get("error_type") for r in result["metrics"].values()):
         raise RuntimeError("Evaluator unavailable; results persisted for retry")
     return result

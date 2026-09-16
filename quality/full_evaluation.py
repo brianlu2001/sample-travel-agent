@@ -80,10 +80,12 @@ def execute(payload):
             verify_target(payload.get("target"))
             record_result(identifier, payload.get("target"))
         return report
-    except Exception:
+    except Exception as error:
         # Preserve partial evidence and make failure visible. An explicit retry
         # resumes completed cases; no automatic loop of expensive full runs.
         store.execute("UPDATE benchmarks SET status='evaluation_failed' WHERE id=? AND status='running'", (identifier,))
+        from quality.repair_dispatch import baseline_failed
+        baseline_failed(identifier, error)
         raise
 
 

@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS repairs (
  id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, status TEXT NOT NULL,
  created REAL NOT NULL, updated REAL NOT NULL, payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS repair_requests (
+ id TEXT PRIMARY KEY, metric_key TEXT NOT NULL, metric TEXT NOT NULL,
+ incident_id TEXT NOT NULL, episode TEXT NOT NULL, state TEXT NOT NULL,
+ created REAL NOT NULL, updated REAL NOT NULL, baseline_id TEXT, repair_id TEXT,
+ detail TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_metric_repair ON repair_requests(metric_key)
+ WHERE state IN ('queued','waiting_baseline','running','awaiting_review','needs_attention');
+CREATE INDEX IF NOT EXISTS repairs_waiting_baseline ON repair_requests(baseline_id,state);
 CREATE TABLE IF NOT EXISTS emails (
  id TEXT PRIMARY KEY, received REAL NOT NULL, sender TEXT NOT NULL,
  recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL

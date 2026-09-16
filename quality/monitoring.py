@@ -47,7 +47,7 @@ def current_window(source, version, benchmark_id=None, evaluation_version=None, 
     return recent
 
 
-def monitor(source, version, benchmark_id=None, evaluation_version=None):
+def monitor(source, version, benchmark_id=None, evaluation_version=None, window_snapshot=None):
     if evaluation_version is None:
         from quality.evaluation import evaluator_version
         evaluation_version = evaluator_version()
@@ -55,7 +55,7 @@ def monitor(source, version, benchmark_id=None, evaluation_version=None):
         return {"status": "offline_experiment_only"}
     # Benchmark runs and live user traffic never share a denominator.
     scope = f"{source}:{version}:{benchmark_id or 'live'}:{evaluation_version}"
-    recent = current_window(source, version, benchmark_id, evaluation_version)
+    recent = current_window(source, version, benchmark_id, evaluation_version) if window_snapshot is None else window_snapshot
     report = summarize(recent)
     store.set_setting(source + "_monitor", {"status": "connected", "at": time.time(),
                                      "source": "Phoenix span annotations", "requests": len(recent),
@@ -78,6 +78,7 @@ def monitor(source, version, benchmark_id=None, evaluation_version=None):
             entry.pop("recovery_at", None)
             if evaluated_total - entry["breach_at"] >= PERSISTENCE:
                 payload = {"scope": scope, "source": source, "version": version, "benchmark_id": benchmark_id,
+                           "episode_id": uuid.uuid4().hex,
                            "evaluator_version": evaluation_version,
                            "metric": name, "measurement": metric, "threshold": THRESHOLD,
                            "window": WINDOW, "min_samples": MIN_SAMPLES,
@@ -88,11 +89,19 @@ def monitor(source, version, benchmark_id=None, evaluation_version=None):
                            "description": f"{source} traffic quality threshold breach; not a statistical claim of population drift."}
                 now = time.time()
                 if not incident or incident[0]["status"] == "resolved":
+                    from quality.repair_dispatch import active
+                    in_progress = active(source, name)
                     incident_id = incident[0]["id"] if incident else uuid.uuid4().hex
+                    if in_progress and incident and in_progress['incident_id'] == incident_id:
+                        # Recovery/rebreach must not replace the evidence being
+                        # investigated or create another episode during review.
+                        payload = json.loads(incident[0]['payload'])
+                        payload['measurement'] = metric
                     with store.connection() as con:
                         con.execute("INSERT INTO incidents(id,fingerprint,status,created,updated,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET status='open',updated=excluded.updated,payload=excluded.payload",
                                     (incident_id, key, "open", now, now, json.dumps(payload)))
-                        store.enqueue("email", f"incident:{incident_id}:{entry['breach_at']}", {"incident_id": incident_id, "event": "opened"}, con)
+                        if not in_progress:
+                            store.enqueue("email", f"incident:{incident_id}:{payload['episode_id']}", {"incident_id": incident_id, "event": "opened"}, con)
                 else:
                     # Keep the triggering conversations stable while new chats
                     # arrive and the repair's before/after experiment is running.
@@ -117,21 +126,22 @@ def monitor(source, version, benchmark_id=None, evaluation_version=None):
 
 
 def schedule_repair():
-    if not store.setting("auto_repair", False):
-        return
+    from quality.repair_dispatch import schedule
+    for incident in store.rows("SELECT * FROM incidents WHERE status='open' ORDER BY created"):
+        schedule(incident)
+
+
+def evaluation_ready(payload):
+    """Runs only after Phoenix acknowledges annotations; stale events cannot alert."""
     from quality.evaluation import evaluator_version
     from quality.config import agent_version
-    audit = store.setting("evaluator_audit", {})
-    if audit.get("status") != "passed" or audit.get("evaluator_version") != evaluator_version():
+    if (not store.setting('monitor_enabled', True) or payload['source'] not in ('live','scenario')
+            or payload['evaluation_version'] != evaluator_version()
+            or payload['version'] != store.setting('serving_agent', {}).get('version',agent_version())):
         return
-    for incident in store.rows("SELECT * FROM incidents WHERE status='open' ORDER BY created"):
-        data = json.loads(incident["payload"])
-        if data.get("metric") not in (*PRIMARY_METRICS, "privacy"):
-            continue
-        if data.get("source") not in ("live", "scenario") or data.get("benchmark_id") or not data.get("failing_run_ids"):
-            continue
-        if data.get("evaluator_version") != evaluator_version() or data.get("version") != agent_version():
-            continue
-        # One investigation per agent/evaluator revision groups related metric flags.
-        key = "repair:" + data["source"] + ":" + fingerprint([data["version"], data["evaluator_version"]])
-        store.enqueue("repair", key, {"incident_id": incident["id"], "live": True})
+    try:
+        return monitor(payload['source'],payload['version'],evaluation_version=payload['evaluation_version'],
+                       window_snapshot=payload.get('window_snapshot'))
+    except Exception as error:
+        store.set_setting('live_monitor', {'status':'unavailable','at':time.time(),'error_type':type(error).__name__})
+        raise  # Durable retry; no lost edge when Phoenix is briefly unavailable.

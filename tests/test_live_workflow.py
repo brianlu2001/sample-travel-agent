@@ -153,7 +153,8 @@ def test_live_incident_schedules_without_an_offline_baseline_and_deduplicates():
     schedule_repair()
     jobs = store.rows("SELECT * FROM jobs")
     assert len(jobs) == 1
-    assert json.loads(jobs[0]["payload"]) == {"incident_id": "1", "live": True}
+    request_id = json.loads(jobs[0]['payload'])['request_id']
+    assert store.rows('SELECT incident_id FROM repair_requests WHERE id=?', (request_id,))[0]['incident_id'] == '1'
 
 
 def test_live_repair_measures_baseline_before_proposal(monkeypatch):

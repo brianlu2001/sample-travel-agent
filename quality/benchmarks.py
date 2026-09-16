@@ -217,8 +217,11 @@ def run(benchmark_id, concurrency=4):
     report["evidence_hash"] = fingerprint([{k: r[k] for k in ("id", "event", "evaluation")} for r in case_rows])
     from quality.versions import archive_benchmark
     with store.connection() as con:
+        con.execute('BEGIN IMMEDIATE')
         con.execute("UPDATE benchmarks SET status='complete',completed=?,report=? WHERE id=?", (time.time(), json.dumps(report), benchmark_id))
         archive_benchmark(con, benchmark_id)
+        from quality.repair_dispatch import baseline_ready
+        baseline_ready(con, benchmark_id)
     (STATE / "benchmarks" / benchmark_id / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     if benchmark["kind"] == "baseline":
         store.set_setting("baseline_id", benchmark_id)

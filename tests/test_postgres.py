@@ -110,3 +110,35 @@ def test_control_decisions_are_serialized(database):
 def test_sql_adapter_keeps_bound_values_and_literal_question_marks():
     from quality.postgres import translate
     assert translate("SELECT '?' text WHERE key=? AND key LIKE 'a%'", True) == "SELECT '?' text WHERE key=%s AND key LIKE 'a%%'"
+
+
+def test_committed_job_pushes_notification_and_rollback_does_not(database):
+    import psycopg
+    with psycopg.connect(store.DATABASE_URL,autocommit=True) as listener:
+        listener.execute('LISTEN quality_jobs')
+        with pytest.raises(ValueError):
+            with store.connection() as con:
+                store.enqueue('repair','rollback-test',{},con)
+                raise ValueError('rollback')
+        assert not list(listener.notifies(timeout=.1,stop_after=1))
+        store.enqueue('repair','commit-test',{})
+        events=list(listener.notifies(timeout=2,stop_after=1))
+        assert len(events)==1 and events[0].payload=='repair'
+
+
+def test_metric_reservations_are_unique_across_replicas(database):
+    from quality import repair_dispatch as dispatch
+    from quality.config import agent_version
+    from quality.evaluation import evaluator_version
+    store.set_setting('auto_repair',True)
+    store.set_setting('evaluator_audit',{'status':'passed','evaluator_version':evaluator_version()})
+    cases=[]
+    for i in range(20):
+        metric='correctness' if i%2 else 'groundedness'
+        data={'source':'live','metric':metric,'version':agent_version(),'evaluator_version':evaluator_version(),'failing_run_ids':['isolated']}
+        store.execute('INSERT INTO incidents VALUES(?,?,?,?,?,?,NULL)',(str(i),str(i),'open',time.time(),time.time(),json.dumps(data)))
+        cases.append({'id':str(i),'payload':json.dumps(data)})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as threads:
+        list(threads.map(dispatch.schedule,cases))
+    assert len(store.rows('SELECT * FROM repair_requests'))==2
+    assert len(store.rows("SELECT * FROM jobs WHERE kind='repair'"))==2

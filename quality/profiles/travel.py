@@ -20,6 +20,14 @@ def fixtures():
     return {name: json.loads((ROOT / "data" / (name + ".json")).read_text()) for name in ("flights", "hotels", "weather")}
 
 
+def evaluation_catalog():
+    """Raw weather seeds are implementation inputs, not date-specific evidence."""
+    data = fixtures()
+    data["weather"] = {"supported_cities": list(data["weather"]),
+                       "contract": "Use the date-adjusted independent_reference for each lookup. Raw temperature seeds are not forecasts. Without a matching lookup, weather measurements are unsupported."}
+    return data
+
+
 def reference_tool(name, args):
     data = fixtures()
     if name == "search_flights":

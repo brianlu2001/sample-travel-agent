@@ -5,16 +5,22 @@ flowchart LR
     U[Chat UI or POST /chat] --> A
     A[Chat agent + OpenInference] -->|Redact real traces| P[Phoenix OSS]
     A -->|Same redacted traces| X[Arize AX]
-    P --> W[One feedback worker]
+    P --> W[Evaluation workers]
     W -->|Evaluate each real turn| P
-    P -->|Live conversation window + annotations| W
-    W -->|Below threshold| F[Email + repair investigation]
-    F --> E[Invariants + targeted Phoenix experiment]
+    W -->|Phoenix acknowledges annotations| M[Durable evaluation event → monitor]
+    P -->|Live conversation window + annotations| M
+    M -->|Below threshold| F[Incident + email + per-metric lock]
+    F --> B[Shared frozen baseline]
+    B --> R1[Repair worker 1]
+    B --> R2[Repair worker 2]
+    R1 --> E[Separate candidates: invariants + targeted Phoenix experiments]
+    R2 --> E
     E -->|Hard checks pass| R[Draft PR]
     R --> D[24h + new version / manual checkpoint]
     D --> C[Full Phoenix experiment + baseline comparisons]
     C -->|Confirmed regression| F
     C --> H[Human approval → merge / deploy]
+    H -->|Verified PR close/merge event| L[Release that metric lock]
 ```
 
 ## Four responsibilities
@@ -26,13 +32,15 @@ flowchart LR
    reference datasets and before/after experiments. The live monitor reads scores
    from Phoenix annotations. Arize AX also receives the same redacted real traces
    using the supplied credentials; it is a separate hosted destination.
-3. **One feedback worker:** evaluates each completed chat, attaches results to Phoenix,
-   checks the rolling window every five seconds, and handles alerts and a bounded
-   repair investigation. It checks daily checkpoint eligibility every 30 seconds.
-   A small SQLite journal provides retries and incident
-   deduplication. The optional [Kubernetes profile](deployment.md) moves the journal
-   to PostgreSQL and separates evaluation replicas from a singleton controller.
-   The running local demo remains on SQLite; no cluster is deployed.
+3. **Feedback workers:** evaluate completed turns and attach results to Phoenix.
+   Each acknowledged evaluation emits a durable monitoring event. The controller
+   evaluates the window on this event, then atomically reserves one investigation
+   for each breached metric. Two independent repair processes can work on different
+   metrics, with separate artifacts and draft PRs. The metric stays locked through
+   human review. Daily checkpoint eligibility is still checked every 30 seconds.
+   Local SQLite provides durable jobs; the [Kubernetes profile](deployment.md) uses
+   PostgreSQL push notifications, evaluator replicas and two repair containers.
+   The running local demo uses processes; no cluster is deployed.
 4. **Demo UI:** chat, live metric cards, real incidents and repair status. Phoenix
    provides detailed trace/experiment inspection. The local SMTP inbox demonstrates
    actual email delivery without requiring a real development-team mailbox.
@@ -59,18 +67,49 @@ no external email delivery is claimed.
    incident and email immediately. At least **95%** resolves it. Unknown, pending
    and not-applicable labels are excluded from pass-rate denominators and shown.
 5. A live flag starts a repair investigation using the failing real conversations.
-   Repeated metric flags for the same agent/evaluator revision share one investigation.
+   Repeated flags for that metric share its active investigation, even across
+   agent/evaluator revisions. Other metrics can start independent investigations.
 6. If no compatible reference baseline exists, the worker measures it **before
    proposing any agent improvement**. The 60-case reference set is for validation;
    its traffic never enters the live monitoring window or opens live quality alerts.
+   Concurrent repairs share one compatible baseline, including one already started
+   by a scheduled/manual evaluation. Baseline completion wakes waiting repairs.
 7. The repair agent proposes a bounded prompt/tool patch, runs invariant checks,
    and executes up to 15 development scenarios. Held-out cases remain outside
    patch-generation context. Hard checks permit a draft PR with full evaluation pending.
-8. The same worker runs a full checkpoint after 24 hours AND an unmeasured version,
+8. The controller runs a full checkpoint after 24 hours AND an unmeasured version,
    or on manual request. It compares with the original and last approved baselines.
    Confirmed regressions raise incidents and bounded follow-up proposals. A person
    reviews the exact tested version, merges and deploys.
    The next agent revision starts its own live quality window. No automatic rollout.
+
+### Delivery and review lifecycle
+
+There is no five-second quality-check timer. The dashboard refreshes every five
+seconds, independently of escalation. After Phoenix acknowledges annotations,
+the journal stores an idempotent monitoring event with the actual Phoenix window
+snapshot. A monitor backlog therefore cannot erase a brief observed breach by
+substituting a later recovered window. PostgreSQL `LISTEN/NOTIFY`
+wakes consumers after commit; jobs, leases and retries provide recovery if a
+notification is missed. SQLite uses short queue polling locally, which does not
+recompute quality. A queue recovery timeout remains necessary after worker failure.
+
+An atomic unique index allows only one active request per project/source/metric.
+Its states are queued → waiting for baseline → running → awaiting review. Recovery
+and a second breach preserve the active repair's evidence and suppress another
+opening alert. A signed GitHub `pull_request.closed` webhook triggers an API check
+of the PR's actual state before releasing the lock. For the loopback demo,
+`python -m scripts.demo sync-prs` performs that same confirmation explicitly.
+Rejected/failed attempts remain visible and do not restart on every new sample;
+operational failures can be retried explicitly. Publication problems retain the lock.
+
+Concurrent PRs can touch the same prompt or tool. They remain separate proposals;
+after merging one, rebase and validate the other against the new baseline before
+approval. The infrastructure does not automatically combine or deploy them.
+
+There are two agent roles: the user-facing travel agent and the repair agent.
+Two repair workers are concurrent instances of the latter. Evaluator workers and
+LLM judges score responses; they are not additional autonomous agents.
 
 ## Reuse without building a platform
 

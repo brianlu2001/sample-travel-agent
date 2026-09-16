@@ -39,7 +39,8 @@ Services run in the background on loopback. On Linux/macOS use the corresponding
 
 Use the chat UI normally. Each completed turn produces a real OpenInference trace;
 Phoenix evaluators assess its final answer asynchronously. The dashboard and
-monitor read scores from **Phoenix span annotations**, refreshing every five seconds.
+monitor read scores from **Phoenix span annotations**. The dashboard refreshes every
+five seconds; monitoring runs on acknowledged evaluation events, without a quality-poll timer.
 
 The live window holds the latest **20 conversations within 24 hours**, separated by
 agent and evaluator version. After **10 applicable judgments** for any of the three primary
@@ -62,8 +63,11 @@ that same API also exercise the live pipeline.
 The 60 reference scenarios are regression tests, **not the live monitoring feed**.
 Full benchmarks run for the initial baseline, scheduled checkpoints and explicit
 operator requests. They make real provider calls.
-A frozen baseline always precedes patch generation. One investigation per agent
-and evaluator revision groups repeated metric flags, avoiding duplicate PRs.
+A frozen baseline always precedes patch generation. One active investigation per
+metric groups repeated flags until its PR is reviewed. Two repair workers can
+investigate different metrics concurrently, sharing a compatible measured baseline.
+Each produces separate artifacts and a draft PR. Closing or merging a PR releases
+its metric lock after GitHub state is confirmed.
 
 A benchmark manifest records source, fixture, dataset, redactor and evaluator
 hashes, models, repetitions and Phoenix experiment IDs. Its original evidence is
@@ -140,6 +144,7 @@ disabled. The dashboard reports actual collector delivery and readback status.
 .\.venv\Scripts\python.exe -m scripts.demo retry-failed
 .\.venv\Scripts\python.exe -m scripts.demo resume-repair
 .\.venv\Scripts\python.exe -m scripts.demo revise-repair
+.\.venv\Scripts\python.exe -m scripts.demo sync-prs
 .\.venv\Scripts\python.exe -m scripts.report
 .\.venv\Scripts\python.exe -m scripts.demo stop
 ```
@@ -150,6 +155,12 @@ Full checkpoint regressions can trigger further revisions, capped at three propo
 per chain. It does not resample an unchanged candidate until it passes. Model calls
 and SMTP are at-least-once operations. Leases and idempotency keys reduce duplicates;
 the local inbox deduplicates Message-ID.
+
+The launcher starts a controller/evaluator process and two independent repair
+processes. The Kubernetes profile uses two repair pods and PostgreSQL push wakeups.
+To automate PR lifecycle updates outside loopback, configure a signed GitHub
+`pull_request` webhook at `/quality/github/webhook` and `QUALITY_GITHUB_WEBHOOK_SECRET`.
+The local `sync-prs` command confirms actual GitHub state without exposing this app.
 
 ## Evaluation policy
 

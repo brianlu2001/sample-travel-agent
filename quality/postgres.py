@@ -77,6 +77,16 @@ def initialize(url, sqlite_schema):
               FOR EACH ROW EXECUTE FUNCTION protect_benchmark_version();
             CREATE INDEX IF NOT EXISTS evaluation_ready ON jobs(available, id)
               WHERE kind='evaluate' AND state IN ('pending','running');
+            CREATE OR REPLACE FUNCTION notify_quality_job()
+            RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+              IF NEW.state='pending' THEN
+                PERFORM pg_notify('quality_jobs', NEW.kind);
+              END IF;
+              RETURN NEW;
+            END $$;
+            CREATE OR REPLACE TRIGGER quality_job_notification
+              AFTER INSERT OR UPDATE OF state,available ON jobs
+              FOR EACH ROW EXECUTE FUNCTION notify_quality_job();
         """)
 
 

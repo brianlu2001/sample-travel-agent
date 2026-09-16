@@ -3,6 +3,9 @@ import asyncio
 import json
 import threading
 import time
+import os
+import hmac
+import hashlib
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -122,6 +125,35 @@ def dashboard():
 def quality_state():
     from quality.dashboard import state
     return state()
+
+
+@app.post('/quality/github/webhook', status_code=202, include_in_schema=False)
+async def github_webhook(request: Request):
+    secret = os.getenv('QUALITY_GITHUB_WEBHOOK_SECRET', '')
+    if not secret:
+        raise HTTPException(503, 'GitHub webhook is not configured')
+    body = await request.body()
+    if len(body) > 2_000_000:
+        raise HTTPException(413, 'Webhook body too large')
+    expected = 'sha256=' + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, request.headers.get('x-hub-signature-256','')):
+        raise HTTPException(401, 'Invalid webhook signature')
+    if request.headers.get('x-github-event') != 'pull_request':
+        return {'ignored':True}
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(400, 'Invalid JSON') from None
+    if payload.get('action') != 'closed':
+        return {'ignored':True}
+    pr_url = payload.get('pull_request',{}).get('html_url')
+    if not pr_url or not store.rows("SELECT id FROM repair_requests WHERE state='awaiting_review' AND json_extract(detail,'$.pr_url')=?", (pr_url,)):
+        return {'ignored':True}
+    delivery = request.headers.get('x-github-delivery','')
+    if not delivery or len(delivery)>200:
+        raise HTTPException(400, 'Missing delivery identifier')
+    store.enqueue('pr_lifecycle','github-delivery:'+delivery,{'pr_url':pr_url})
+    return {'queued':True}
 
 
 class FullEvaluationRequest(BaseModel):

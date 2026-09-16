@@ -51,13 +51,17 @@ def start():
     import psutil
     worker = store.setting("process:worker")
     if not worker or not psutil.pid_exists(worker["pid"]):
-        spawn("worker", [sys.executable, "-X", "utf8", "-m", "quality.worker", "--evaluators", os.getenv("QUALITY_EVALUATORS", "8")])
+        spawn("worker", [sys.executable, "-X", "utf8", "-m", "quality.worker", "--no-repairs", "--evaluators", os.getenv("QUALITY_EVALUATORS", "8")])
+    for name in ('repair-worker-1','repair-worker-2'):
+        saved = store.setting('process:'+name)
+        if not saved or not psutil.pid_exists(saved['pid']):
+            spawn(name, [sys.executable, '-X', 'utf8', '-m', 'quality.worker', '--repair-only', '--repairers', '1'])
     if not healthy("http://127.0.0.1:8000/health"):
         spawn("api", [sys.executable, "-X", "utf8", "-m", "uvicorn", "agent.api:app", "--host", "127.0.0.1", "--port", "8000"])
     print("Chat: http://127.0.0.1:8000/\nDashboard: http://127.0.0.1:8000/dashboard\nPhoenix: http://127.0.0.1:6006/")
 
 
-def stop(names=("api", "worker-export", "worker-extra", "worker", "mailbox", "phoenix")):
+def stop(names=("api", "worker-export", "worker-extra", "repair-worker-1", "repair-worker-2", "worker", "mailbox", "phoenix")):
     import psutil
     for name in names:
         saved = store.setting("process:"+name)
@@ -126,7 +130,7 @@ def resume_provider():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["start", "stop", "enable-repair", "enable-checkpoints", "status", "retry-failed", "resume-repair", "revise-repair", "resume-provider"])
+    parser.add_argument("action", choices=["start", "stop", "enable-repair", "enable-checkpoints", "status", "retry-failed", "resume-repair", "revise-repair", "resume-provider", "sync-prs"])
     args = parser.parse_args()
     store.init()
     if args.action == "start":
@@ -137,6 +141,13 @@ def main():
         enable_repair()
     elif args.action == "enable-checkpoints":
         enable_checkpoints()
+    elif args.action == 'sync-prs':
+        from quality.repair_dispatch import sync_pr
+        for row in store.rows("SELECT detail FROM repair_requests WHERE state='awaiting_review'"):
+            pr_url = json.loads(row['detail']).get('pr_url')
+            if pr_url:
+                sync_pr(pr_url)
+        print('Confirmed GitHub PR states; completed reviews release their metric locks.')
     elif args.action == "resume-provider":
         resume_provider()
     elif args.action == "retry-failed":
@@ -144,7 +155,9 @@ def main():
         store.execute("UPDATE jobs SET state='pending',available=?,attempts=0 WHERE state='dead' AND kind!='repair'", (time.time(),))
         print("Failed infrastructure/evaluation jobs requeued")
     elif args.action == "resume-repair":
-        store.execute("UPDATE jobs SET state='pending',available=?,attempts=0 WHERE state='dead' AND kind='repair'", (time.time(),))
+        from quality.repair_dispatch import retry_failed
+        retry_failed()
+        store.execute("UPDATE jobs SET state='pending',available=?,attempts=0 WHERE state='dead' AND kind='repair' AND json_extract(payload,'$.request_id') IS NULL", (time.time(),))
         print("Failed repair jobs requeued; existing validated candidates and completed benchmark cases are reused")
     elif args.action == "revise-repair":
         baseline_id = store.setting("baseline_id")

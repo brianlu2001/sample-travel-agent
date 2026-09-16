@@ -52,6 +52,9 @@ def state():
         runs[-1]["requires_revalidation"] = bool(evaluation and evaluation.get("version") != active_evaluator)
     incidents = store.rows("SELECT * FROM incidents ORDER BY created DESC LIMIT 100")
     repairs = store.rows("SELECT * FROM repairs ORDER BY created DESC LIMIT 100")
+    repair_requests = store.rows('SELECT * FROM repair_requests ORDER BY created DESC LIMIT 100')
+    for request in repair_requests:
+        request['detail'] = json.loads(request['detail'])
     for row in incidents + repairs:
         row["payload"] = json.loads(row["payload"])
     for row in incidents:
@@ -73,6 +76,7 @@ def state():
             "full_evaluation": full_evaluation_status(),
             "checkpoints": checkpoint_state(),
             "incidents": incidents, "repairs": repairs, "jobs": jobs,
+            "repair_requests": repair_requests,
             "emails": emails,
             "phoenix_url": PHOENIX, "baseline_id": store.setting("baseline_id"),
             "auto_repair": store.setting("auto_repair", False),
@@ -83,7 +87,7 @@ def state():
             "evaluator_version": active_evaluator,
             "serving_agent": {**serving_agent, "restart_required": serving_agent["version"] != agent_version()},
             "version_updates": recent_updates(active_evaluator, repairs),
-            "monitor": {"metrics": PRIMARY_METRICS, "threshold": THRESHOLD, "window": WINDOW, "minimum_samples": MIN_SAMPLES,
+            "monitor": {"delivery_mode": "evaluation_events", "metrics": PRIMARY_METRICS, "threshold": THRESHOLD, "window": WINDOW, "minimum_samples": MIN_SAMPLES,
                         "max_age_hours": 24, "persistence": PERSISTENCE, "recovery_threshold": RECOVERY},
             "calibration": calibration()}
 
