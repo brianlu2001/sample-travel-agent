@@ -183,7 +183,7 @@ def test_targeted_selection_includes_incident_and_no_holdout():
 @pytest.mark.parametrize("operator_review", [True, False])
 def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkeypatch, invariants_pass, operator_review):
     from types import SimpleNamespace
-    from quality import remediation, evaluation, config
+    from quality import remediation, evaluation, config, benchmarks, repair_tools
     from quality.config import fingerprint
     rows = measured("baseline")
     report = json.loads(store.rows("SELECT report FROM benchmarks WHERE id='baseline'")[0]["report"])
@@ -196,10 +196,21 @@ def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkey
     monkeypatch.setattr(remediation, "STATE", tmp_path)
     monkeypatch.setattr(config, "STATE", tmp_path)
     monkeypatch.setattr(evaluation, "evaluator_version", lambda: "judge")
+    monkeypatch.setattr(remediation, "agent_version", lambda: CONFIG["agent_version"])
     evidence = [{"run_id": "isolated", "input": [{"role": "user", "content": "Plan a visit to Paris"}]}]
     monkeypatch.setattr(remediation, "live_evidence", lambda _: evidence)
     candidate = {"prompt": "Travel only", "functions": {}, "summary": "Isolated test patch", "rationale": "Test"}
-    monkeypatch.setattr(remediation, "propose", lambda *a: (copy.deepcopy(candidate), {}))
+    def sdk_loop(*args, workflow):
+        workflow.investigation = SimpleNamespace(loaded={("arize-experiment", "SKILL.md"), ("phoenix-evals", "references/validation.md")}, usage=[])
+        workflow.stage(copy.deepcopy(candidate))
+        if not workflow.call("run_candidate_checks", {})["passed"]:
+            workflow.call("finish_repair", {"reason": "Hard checks failed; review needed"})
+            return
+        workflow.call("run_targeted_evaluation", {})
+        workflow.call("publish_draft_pr", {})
+    monkeypatch.setattr(remediation, "propose", sdk_loop)
+    monkeypatch.setattr(repair_tools.RepairTools, "allow_results", lambda *a: None)
+    monkeypatch.setattr(repair_tools.RepairTools, "require_review", lambda *a: None)
     monkeypatch.setattr(remediation.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps({"passed": invariants_pass})))
     monkeypatch.setattr(remediation, "candidate_files", lambda *a: {"agent/tools.py": "# test", "agent/prompt.py": "# test"})
     monkeypatch.setattr(remediation, "verify_artifact", lambda *a: {"passed": True})
@@ -209,14 +220,14 @@ def test_repair_uses_targeted_signals_and_only_hard_gates_block(tmp_path, monkey
         assert kwargs["kind"] == "targeted" and kwargs["repetitions"] == 1
         assert len(kwargs["examples"]) == 15
         return "targeted"
-    monkeypatch.setattr(remediation, "create", create)
+    monkeypatch.setattr(benchmarks, "create", create)
     # Low semantic scores are recorded development signals, not automatic rejection.
-    monkeypatch.setattr(remediation, "run", lambda *a, **kw: {"metrics": {name: {"pass_rate": .2, "pass": 3, "n": 15} for name in METRICS}, "evidence_hash": "unit-only"})
+    monkeypatch.setattr(benchmarks, "run", lambda *a, **kw: {"metrics": {name: {"pass_rate": .2, "pass": 3, "n": 15} for name in METRICS}, "evidence_hash": "unit-only", "case_run_ids": []})
     monkeypatch.setattr(remediation, "publish", lambda *a: "https://github.com/unit/test/pull/1")
     monkeypatch.setattr(cp, "recover_pr_head", lambda *a: None)
     identifier = remediation.repair("incident", "baseline")
     row = store.rows("SELECT * FROM repairs WHERE id=?", (identifier,))[0]
-    assert row["status"] == ("pr_open" if invariants_pass else "rejected")
+    assert row["status"] == ("pr_open" if invariants_pass else "awaiting_human_evidence")
     assert len(calls) == (1 if invariants_pass else 0)
     assert json.loads(row["payload"])["trigger"] == ("operator_review" if operator_review else "live_chat_incident")
     if invariants_pass:

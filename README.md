@@ -55,12 +55,13 @@ that same API also exercise the live pipeline.
 
 1. Preserve the flagged real conversations and trace IDs as diagnosis evidence.
 2. Measure a current-agent reference baseline if a compatible one is unavailable.
-3. Start a Claude Agent SDK repair session: load relevant official Arize/Phoenix
-   skills, inspect actual Phoenix evidence, and propose a minimal fix from the
+3. Start one Claude Agent SDK repair session: load relevant official Arize/Phoenix
+   skills, inspect actual Phoenix evidence, and stage a minimal fix from the
    sanitized **live failures**.
-4. Validate the proposed functions and run up to 15 targeted development scenarios
-   in Phoenix, including incident reproductions. Held-out cases stay out of diagnosis.
-5. Open/update a draft PR after hard checks pass. Full evaluation follows the daily
+4. That session calls fixed checks and up to 15 targeted Phoenix development
+   scenarios, inspects results, and revises when warranted (three candidates max).
+   Held-out cases stay out of diagnosis; completed experiments survive restarts.
+5. The SDK calls a gated tool to open/update a draft PR. Full evaluation follows the daily
    checkpoint policy or a manual request. Human review controls merge and deployment.
 
 The 60 reference scenarios are regression tests, **not the live monitoring feed**.
@@ -82,8 +83,9 @@ or credentials. GitHub credentials use the existing credential helper or
 
 The repair runtime uses Phoenix evaluation/tracing skills and Arize prompt
 optimization/experiment skills, with native SDK skill loading and Phoenix MCP
-tools. Each session has its own workspace and budget; existing workers execute
-validation and publish the proposal. [Runtime architecture and skill rationale](docs/repair-runtime.md).
+tools. Each session has its own workspace and budget and calls validation and draft
+publication tools itself. Workers retain durable delivery and per-metric locks.
+[Runtime architecture and skill rationale](docs/repair-runtime.md).
 
 ### 3. Inspect and calibrate
 

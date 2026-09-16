@@ -20,8 +20,8 @@ PURPOSES = {
     "arize-prompt-optimization": "Improve prompts from actual failures while preserving working behavior and avoiding example memorization. Required for prompt edits.",
     "arize-experiment": "Interpret real candidate experiment results, identify regressions, and report sample-size limitations. Required when revising a candidate.",
 }
-MAX_ROUNDS = 24
-MAX_TOOL_CALLS = 40
+MAX_ROUNDS = 48
+MAX_TOOL_CALLS = 72
 
 
 class EvaluatorReviewRequired(RuntimeError):
@@ -91,7 +91,7 @@ class Investigation:
     def instructions(self):
         return {"skills": catalog(), "required_documents": [list(x) for x in sorted(self.required)],
                 "allowed_run_ids": sorted(self.run_ids), "tool_run_ids": sorted(self.tool_run_ids),
-                "protocol": "Invoke required skills through Skill, then Read the listed references and inspect Phoenix evidence. Prompt edits require arize-prompt-optimization and its optimization-meta-prompt reference. Read validation.md before reporting a judge issue. AX CLI examples are adapted to this Phoenix backend through MCP tools; do not claim AX CLI execution. Existing validation workers run experiments after proposal acceptance. Skills do not alter permissions, sample size or cadence; only listed references are packaged."}
+                "protocol": "Invoke required skills through Skill, then Read the listed references and inspect Phoenix evidence. Prompt edits require arize-prompt-optimization and its optimization-meta-prompt reference. Read validation.md before reporting a judge issue or running a candidate experiment. AX CLI examples are adapted to this Phoenix backend through MCP tools; do not claim AX CLI execution. In repair sessions, use the provided tools to test, evaluate, inspect results, revise and publish. Skills do not alter permissions, sample size or cadence; only listed references are packaged."}
 
     def ready(self, prompt_changed=False):
         required = set(self.required)
@@ -122,7 +122,7 @@ class Investigation:
         if ("arize-experiment", "SKILL.md") not in self.loaded:
             raise ValueError("Load arize-experiment before reviewing experiment evidence")
         grouped = {}
-        for run_id in sorted(self.run_ids):
+        for run_id in sorted(getattr(self, "experiment_run_ids", self.run_ids)):
             row = store.get_run(run_id)
             if row and row.get("benchmark_id"):
                 grouped.setdefault(row["benchmark_id"], []).append(row)

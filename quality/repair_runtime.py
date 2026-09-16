@@ -1,7 +1,7 @@
 """One Claude Agent SDK session per repair; Phoenix tools run in the worker.
 
-The model has an isolated scratch workspace and native Skill/Read tools. It
-submits a candidate through MCP; the existing controller owns tests and GitHub.
+The model has an isolated scratch workspace, skills and constrained MCP tools
+for the entire repair loop. Durable workers host sessions; they do not plan fixes.
 """
 import asyncio
 import json
@@ -19,6 +19,7 @@ from quality.config import REPAIR_MODEL
 from quality.privacy import safe_payload
 from quality.repair_skills import MAX_ROUNDS, MAX_TOOL_CALLS, PURPOSES, TOOLS, catalog, read_document
 from quality.sandbox import validate_candidate
+from quality.repair_tools import TOOLS as REPAIR_TOOLS
 from quality.tracing import error_status, ids, set_io, setup
 
 PATCH_SCHEMA = {"type": "object", "properties": {
@@ -55,16 +56,21 @@ def runtime_environment(directory):
     home.mkdir()
     env.update(HOME=str(home), USERPROFILE=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"),
                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_TELEMETRY="1",
-               DISABLE_ERROR_REPORTING="1", CLAUDE_CODE_ENABLE_TELEMETRY="0")
+               DISABLE_ERROR_REPORTING="1", CLAUDE_CODE_ENABLE_TELEMETRY="0", MCP_TOOL_TIMEOUT="5400000")
     return env
 
 
 class Session:
-    def __init__(self, investigation, directory, original_prompt):
+    def __init__(self, investigation, directory, original_prompt, workflow=None):
         self.investigation = investigation
         self.directory = Path(directory)
         self.documents = prepare_workspace(directory)
         self.original_prompt = original_prompt
+        self.workflow = workflow
+        if workflow:
+            workflow.investigation = investigation
+            workflow.restore_results()
+        self.lock = asyncio.Lock()
         self.candidate = None
         self.finding = None
         self.tool_count = 0
@@ -85,15 +91,15 @@ class Session:
     async def before_tool(self, event, tool_id, context):
         self.tool_count += 1
         name, arguments = event["tool_name"], event["tool_input"]
-        approved = name in {"mcp__phoenix__" + t["name"] for t in TOOLS} | {"mcp__phoenix__propose_patch"}
+        approved = name in {"mcp__phoenix__" + t["name"] for t in TOOLS + (REPAIR_TOOLS if self.workflow else [])} | {"mcp__phoenix__propose_patch"}
         document = self.native_document(name, arguments)
-        if self.tool_count > MAX_TOOL_CALLS or self.candidate is not None or self.finding is not None:
+        if self.tool_count > MAX_TOOL_CALLS or self.finished:
             approved = False
             document = None
         if not approved and document is None:
             self.investigation.calls.append({"tool": name, "arguments": safe_payload(arguments), "status": "denied"})
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                    "permissionDecisionReason": "Only packaged skills, scoped Phoenix evidence, and one terminal proposal are available within the tool budget."}}
+                    "permissionDecisionReason": "Only packaged skills, scoped evidence and constrained repair tools are available before completion and within budget."}}
         if document:
             # Verify the pinned source and the staged file before a native read.
             source = read_document(*document)
@@ -123,8 +129,18 @@ class Session:
                 span.end()
         return {}
 
+    @property
+    def finished(self):
+        return self.finding is not None or (self.workflow.finished if self.workflow else self.candidate is not None)
+
     async def call(self, name, arguments):
-        if name not in ("propose_patch", "report_evaluator_issue"):
+        # SDK may issue parallel tool calls. Serialize this incident's mutations;
+        # other metric sessions keep running independently.
+        async with self.lock:
+            return await self._traced_call(name, arguments)
+
+    async def _traced_call(self, name, arguments):
+        if name in ("inspect_phoenix_trace", "inspect_phoenix_experiments"):
             return await self._call(name, arguments)
         with setup().start_as_current_span("repair." + name, openinference_span_kind="tool",
                                           record_exception=False, set_status_on_exception=False) as span:
@@ -137,7 +153,7 @@ class Session:
             return result
 
     async def _call(self, name, arguments):
-        if self.candidate is not None or self.finding is not None:
+        if self.finished:
             result = {"error": "Investigation already finished"}
         elif name == "propose_patch":
             result = self.investigation.ready(prompt_changed=arguments.get("prompt") != self.original_prompt)
@@ -146,23 +162,34 @@ class Session:
             else:
                 try:
                     validate_candidate(arguments)
-                    self.candidate = arguments
-                    result = {"accepted": True, "instruction": "Stop. The controller now owns validation and PR publication."}
-                except ValueError:
-                    result = {"error": "Candidate rejected by the existing patch constraints"}
+                    if self.workflow:
+                        result = await asyncio.to_thread(self.workflow.stage, arguments)
+                        self.candidate = result["candidate"]
+                    else:
+                        self.candidate = arguments
+                        result = {"accepted": True, "instruction": "Investigation-only session complete. This patch has not been validated or published."}
+                except (ValueError, SyntaxError) as error:
+                    result = {"error": safe_payload(str(error))}
         elif name == "report_evaluator_issue":
             try:
                 self.finding = self.investigation.evaluator_issue(arguments)
-                result = {"recorded": True, "instruction": "Stop. Human evidence review is required; no patch was accepted."}
+                result = {"recorded": True, "instruction": "Stop. Human evidence review is required; no PR published by this session."}
             except ValueError as error:
                 result = {"error": str(error)}
+        elif self.workflow and name in {t["name"] for t in REPAIR_TOOLS}:
+            try:
+                result = await asyncio.to_thread(self.workflow.call, name, arguments)
+            except ValueError as error:
+                result = {"error": safe_payload(str(error))}
+            except Exception as error:
+                result = {"error": type(error).__name__, "instruction": "The operation failed. Saved work is retained. Retry a transient failure or finish_repair with the blocker; do not claim success."}
         else:
             result = await asyncio.to_thread(self.investigation.call, name, arguments)
         return {"content": [{"type": "text", "text": json.dumps(safe_payload(result))}], "isError": "error" in result}
 
     def mcp(self):
         tools = []
-        for definition in TOOLS + [{"name": "propose_patch", "description": "Submit a complete bounded candidate after investigating real evidence.", "input_schema": PATCH_SCHEMA}]:
+        for definition in TOOLS + (REPAIR_TOOLS if self.workflow else []) + [{"name": "propose_patch", "description": "Stage a bounded candidate after investigating real evidence. In the repair workflow, continue with checks, targeted evaluation, result inspection and draft publication. Revising preserves previous function edits; max three candidates.", "input_schema": PATCH_SCHEMA}]:
             async def handler(arguments, name=definition["name"]):
                 return await self.call(name, arguments)
             tools.append(tool(definition["name"], definition["description"], definition["input_schema"])(handler))
@@ -183,14 +210,14 @@ class Session:
         )
 
 
-async def run_session(investigation, system, payload, original_prompt):
+async def run_session(investigation, system, payload, original_prompt, workflow=None):
     with tempfile.TemporaryDirectory(prefix="quality-repair-") as directory:
-        session = Session(investigation, directory, original_prompt)
+        session = Session(investigation, directory, original_prompt, workflow)
         llm_span = None
         usage, output = {}, []
         result = None
         try:
-            async with asyncio.timeout(600):
+            async with asyncio.timeout(5400 if workflow else 600):
                 async for message in query(prompt=json.dumps(safe_payload(payload)), options=session.options(system)):
                     if isinstance(message, SystemMessage) and message.subtype == "init":
                         session.metadata["discovered_skills"] = message.data.get("skills", [])
@@ -235,5 +262,8 @@ async def run_session(investigation, system, payload, original_prompt):
         if result is None or result.is_error or result.subtype != "success" or result.terminal_reason not in (None, "completed"):
             raise RuntimeError("Repair SDK session did not complete: " + str(result.subtype if result else "no_result"))
         if session.candidate is None and session.finding is None:
-            raise RuntimeError("Repair SDK session completed without an evidence-backed outcome")
+            if not workflow or not workflow.finished:
+                raise RuntimeError("Repair SDK session completed without an evidence-backed outcome")
+        if workflow and not session.finding and not workflow.finished:
+            raise RuntimeError("Repair SDK stopped before publishing or recording a blocker")
         return session.candidate, session.finding, session.metadata

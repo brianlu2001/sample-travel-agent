@@ -2,7 +2,6 @@
 import ast
 import asyncio
 import base64
-import difflib
 import json
 import os
 import shutil
@@ -18,9 +17,7 @@ from quality import store
 from quality.benchmarks import create, run
 from quality.config import PRIMARY_METRICS, ROOT, STATE, agent_version, fingerprint, fixture_version
 from quality.evaluation import scenarios
-from quality.privacy import safe_payload
 from quality.profiles.travel import POLICY, validate_tools
-from quality.sandbox import validate_candidate
 from quality.tracing import ids, set_io, setup
 from quality.checkpoint_policy import POLICY as CHECKPOINT_POLICY, version as checkpoint_policy_version
 from quality.repair_skills import EvaluatorReviewRequired, Investigation
@@ -30,7 +27,7 @@ def update(repair_id, status, payload):
     store.execute("UPDATE repairs SET status=?,updated=?,payload=? WHERE id=?", (status, time.time(), json.dumps(payload), repair_id))
 
 
-def evidence_for(baseline):
+def evidence_for(baseline, metric=None):
     development = {s["id"]: s for s in scenarios() if s["split"] == "development"}
     evidence = []
     counts = {}
@@ -43,10 +40,12 @@ def evidence_for(baseline):
         if counts.get(category, 0) >= 2:
             continue
         evaluation = row["evaluation"]
+        if metric in PRIMARY_METRICS and evaluation["metrics"].get(metric, {}).get("label") != "fail":
+            continue
         if not any(m["label"] == "fail" for name, m in evaluation["metrics"].items() if name in PRIMARY_METRICS) and not any(d["label"] == "fail" for d in evaluation["tool_diagnostics"]):
             continue
         counts[category] = counts.get(category, 0)+1
-        evidence.append({"run_id": run_id, "benchmark_id": row.get("benchmark_id"), "category": category, "input": row["event"]["input"],
+        evidence.append({"run_id": run_id, "benchmark_id": row.get("benchmark_id"), "category": category, "target_metric": metric, "input": row["event"]["input"],
                          "answer": row["event"]["output"], "tools": row["event"]["tools"],
                          "metrics": evaluation["metrics"], "diagnostics": evaluation["tool_diagnostics"],
                          "independent_references": validate_tools(row['event']['tools'])[1]})
@@ -135,7 +134,7 @@ def repair_live_incident(incident_id):
     return repair(incident_id, baseline_id)
 
 
-def propose(evidence, baseline_id, validation_feedback=None):
+def propose(evidence, baseline_id, validation_feedback=None, workflow=None):
     directory = STATE / "benchmarks" / baseline_id
     system = """You are a repair agent for an existing small travel agent. Diagnose the supplied
 actual execution failures and propose a minimal fix focused on target_metric. Preserve the other metrics.
@@ -162,7 +161,18 @@ Read packaged references with Read using the skill base directory. Do not run AX
 Before changing the prompt, invoke arize-prompt-optimization and read optimization-meta-prompt.md;
 apply its method to current_prompt and failures, returning our propose_patch schema.
 Use arize-experiment for candidate revisions and inspect_phoenix_experiments for actual linked results.
-After submitting a patch or issue, stop without further tool calls.
+If repair workflow tools are available, you own the entire repair loop in this session:
+get_repair_state -> diagnose -> propose_patch -> run_candidate_checks -> run_targeted_evaluation ->
+inspect_phoenix_experiments and candidate traces -> revise if warranted, or publish_draft_pr.
+propose_patch stages a candidate; it is NOT completion. You must continue to a draft PR or a
+recorded blocker. No separate agent will finish these steps for you. Load arize-experiment and
+phoenix-evals references/validation.md before running experiments. Preserve successful edits.
+At most three candidate revisions are allowed. Each candidate gets one fixed development-only
+experiment; retries reuse it. Do not chase perfect small-sample scores or run a full benchmark.
+If evidence is insufficient, tool access is unavailable, or the revision budget is exhausted,
+use finish_repair with a specific blocker, or report_evaluator_issue for a cited judge disagreement.
+Stop after draft publication, finish_repair, or report_evaluator_issue.
+In investigation-only sessions without workflow tools, stop after propose_patch.
 Use phoenix-evals validation guidance when labels conflict with facts or reviewing a prior candidate.
 Report an evaluator issue instead of changing correct agent behavior to satisfy a bad judge.
 Reconcile recorded review_findings against actual trace content. Reviewer identity is preserved;
@@ -175,14 +185,18 @@ Use propose_patch when the diagnosis supports an agent fix. Held-out cases are u
                "current_tools": (directory / "tools.py").read_text(encoding="utf-8"),
                "current_prompt": (directory / "prompt.py").read_text(encoding="utf-8"),
                "validation_feedback": validation_feedback, "investigation": investigation.instructions()}
+    if workflow:
+        workflow.investigation = investigation
+        workflow.restore_results()
+        payload["repair_state"] = workflow.state()
     from quality.repair_runtime import run_session
     original_prompt = ast.literal_eval(ast.parse(payload["current_prompt"]).body[0].value)
-    with setup().start_as_current_span("quality.propose_patch", openinference_span_kind="agent",
+    with setup().start_as_current_span("quality.repair" if workflow else "quality.propose_patch", openinference_span_kind="agent",
                                        record_exception=False, set_status_on_exception=False) as span:
         span.set_attribute("metadata", json.dumps({"source": "remediation", "baseline_id": baseline_id, "runtime": "claude-agent-sdk"}))
         set_io(span, payload)
         try:
-            candidate, finding, runtime = asyncio.run(run_session(investigation, system, payload, original_prompt))
+            candidate, finding, runtime = asyncio.run(run_session(investigation, system, payload, original_prompt, workflow=workflow))
             audit = {**ids(span), **investigation.audit(), "sdk": runtime}
             span.set_attribute("metadata", json.dumps({"source": "remediation", "baseline_id": baseline_id, **audit}))
             set_io(span, {"evidence_run_ids": [e["run_id"] for e in evidence]}, {"candidate": candidate, "evaluator_issue": finding, **audit})
@@ -195,6 +209,13 @@ Use propose_patch when the diagnosis supports an agent fix. Held-out cases are u
             from quality.tracing import error_status
             error_status(span, error)
             raise
+        finally:
+            if workflow:
+                workflow.payload.update(proposal_trace={**ids(span), **investigation.audit()},
+                                        skill_usage=investigation.usage, investigation_calls=investigation.calls)
+                if "runtime" in locals():
+                    workflow.payload["proposal_trace"]["sdk"] = runtime
+                workflow.save(workflow.saved.get("status", "diagnosing"))
 
 
 def candidate_files(candidate, baseline_id):
@@ -350,6 +371,8 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
     from quality.evaluation import evaluator_version
     if json.loads(baseline["manifest"]).get("evaluator_version") != evaluator_version():
         raise ValueError("Repair locked: baseline requires revalidation with the current evaluator")
+    if json.loads(baseline["manifest"]).get("agent_version") != agent_version():
+        raise ValueError("Repair locked: measure the currently deployed agent before proposing changes")
     prior = None
     if revision_of:
         prior_rows = store.rows("SELECT * FROM repairs WHERE id=? AND status IN ('rejected','pr_open')", (revision_of,))
@@ -360,7 +383,7 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
             raise ValueError("Revision limit reached or baseline changed; human review required")
     existing = (store.rows('SELECT * FROM repairs WHERE id=?', (request_id,)) if request_id else
                 store.rows("SELECT * FROM repairs WHERE incident_id=? AND json_extract(payload,'$.revision_of') IS ?", (incident_id, revision_of)))
-    if existing and existing[0]["status"] in ("pr_open", "rejected"):
+    if existing and existing[0]["status"] in ("pr_open", "rejected", "merged", "pr_closed", "superseded", "awaiting_human_evidence"):
         return existing[0]["id"]
     repair_id = existing[0]["id"] if existing else request_id or uuid.uuid4().hex
     directory = STATE / "repairs" / repair_id
@@ -394,7 +417,7 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
             checkpoint_id = json.loads(incident_rows[0]["payload"]).get("benchmark_id") if source == "checkpoint" else None
             evidence_id = checkpoint_id or (prior.get("targeted_benchmark_id", prior.get("candidate_benchmark_id")) if prior else None)
             evidence_source = store.rows("SELECT * FROM benchmarks WHERE id=? AND status='complete'", (evidence_id,))[0] if evidence_id else baseline
-            evidence = evidence_for(evidence_source)
+            evidence = evidence_for(evidence_source, payload['metric'])
             if not evidence:
                 update(repair_id, "awaiting_human_evidence", {**payload, "summary": "No development failure evidence available; held-out examples remain excluded from patch generation."})
                 return repair_id
@@ -405,113 +428,26 @@ def repair(incident_id, baseline_id, revision_of=None, request_id=None):
                               ("scenario_incident" if source == "scenario" else "live_chat_incident") if is_live else "historical_offline_workflow")
         payload["evaluator_version"] = json.loads(baseline["manifest"])["evaluator_version"]
         payload["evidence_run_ids"] = [e["run_id"] for e in evidence]
-        candidate_path = directory / "candidate.json"
-        if candidate_path.exists() and payload.get("invariant_gate", {}).get("passed"):
-            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
-            validate_candidate(candidate)
-            if fingerprint(candidate) != payload["candidate_hash"]:
-                raise ValueError("Candidate changed since validation")
-        else:
-            feedback = ({"previous_candidate": json.loads((STATE / "repairs" / revision_of / "candidate.json").read_text(encoding="utf-8")),
-                         "review_findings": prior.get("review_findings", []),
-                         "instruction": "Create a distinct revised proposal from these DEVELOPMENT execution failures. Preserve the successful fixes. Check scope boundaries and invalid input handling. No held-out examples or scores are provided."} if prior else None)
-            for attempt in range(1, 3):
-                candidate, trace_ids = propose(evidence, baseline_id, feedback)
-                if prior:
-                    previous_candidate = json.loads((STATE / "repairs" / revision_of / "candidate.json").read_text(encoding="utf-8"))
-                    candidate["functions"] = {**previous_candidate["functions"], **candidate["functions"]}
-                    validate_candidate(candidate)
-                candidate_path.write_text(json.dumps(candidate, indent=2), encoding="utf-8")
-                payload.update({"attempt": attempt, "summary": safe_payload(candidate["summary"]), "rationale": safe_payload(candidate["rationale"]),
-                                "candidate_hash": fingerprint(candidate), "proposal_trace": trace_ids})
-                payload["skill_usage"] = trace_ids.get("skill_usage", [])
-                payload["investigation_calls"] = trace_ids.get("investigation_calls", [])
-                update(repair_id, "validating", payload)
-                checked = subprocess.run([sys.executable, "-X", "utf8", "-m", "quality.validation", str(candidate_path)],
-                                         cwd=ROOT, text=True, encoding="utf-8", capture_output=True, timeout=30)
-                if checked.returncode:
-                    feedback = {"error": "Candidate failed constrained validation"}
-                else:
-                    feedback = json.loads(checked.stdout)
-                    if feedback["passed"]:
-                        break
-            payload["invariant_gate"] = feedback
-            if not feedback.get("passed"):
-                update(repair_id, "rejected", payload)
-                return repair_id
-        files = candidate_files(candidate, baseline_id)
-        files["tests/test_agent_regressions.py"] = REGRESSION_TEST
-        payload["artifact_gate"] = verify_artifact(files, directory)
-        if not payload["artifact_gate"]["passed"]:
-            update(repair_id, "rejected", payload)
-            return repair_id
-        patch = ""
-        for name, content in files.items():
-            original = (ROOT / name).read_text(encoding="utf-8") if (ROOT / name).exists() else ""
-            patch += "".join(difflib.unified_diff(original.splitlines(keepends=True), content.splitlines(keepends=True), fromfile="a/"+name, tofile="b/"+name))
-        (directory / "candidate.patch").write_text(patch, encoding="utf-8")
-        from quality.targeted import select
-        examples = select(evidence, CHECKPOINT_POLICY["targeted_cases"])
-        candidate_id = payload.get("targeted_benchmark_id") or create(kind="targeted", parent_id=baseline_id, candidate=str(candidate_path), repetitions=1, examples=examples)
-        payload["targeted_benchmark_id"] = candidate_id
-        update(repair_id, "experimenting", payload)
-        candidate_report = run(candidate_id, concurrency=3)
-        blockers = []
-        if candidate_report.get("privacy_failures"):
-            blockers.append("Privacy redaction failed")
-        if candidate_report.get("tool_contract_failures"):
-            blockers.append("Deterministic tool contract failures remain")
-        if any(m.get("unknown") or m.get("pending") for name, m in candidate_report["metrics"].items() if name in PRIMARY_METRICS):
-            blockers.append("Targeted evaluation is incomplete")
-        payload["gate"] = {"passed": not blockers, "reasons": blockers, "stage": "targeted", "full_checkpoint": "pending"}
-        rows = ["| Metric | Targeted candidate results |", "|---|---:|"]
-        for name, metric in candidate_report["metrics"].items():
-            rate = metric["pass_rate"]
-            rows.append(f"| {name} | {rate:.1%} ({metric['pass']}/{metric['n']}) |" if rate is not None else f"| {name} | N/A |")
-        body = ("## Problem and resulting behavior\n\n" + candidate["summary"] + "\n\n" + candidate["rationale"] +
-                (("\n\nTriggered by an operator-requested review of recorded failures, not a rolling-window threshold breach. " if operator_review else
-                  f"\n\nTriggered by a rolling {source} traffic quality incident. ") + "Sanitized failing conversations informed this patch. "
-                 + ("Scenario traffic consists of real agent executions on synthetic development inputs, kept separate from user chats. " if source == "scenario" else "")
-                 + "A frozen reference dataset provides before/after validation; held-out cases remain excluded from diagnosis." if is_live else "") +
-                "\n\n## Validation\n\n" + "\n".join(rows) +
-                f"\n\nTargeted development check: {len(examples)} scenarios, one actual execution each. Frozen original baseline `{baseline_id}`; targeted experiment `{candidate_id}`. "
-                f"Targeted evidence SHA-256: `{candidate_report['evidence_hash']}`.\n\n"
-                "Independent tool invariants passed. Evaluators, fixtures and scenario versions were held fixed; held-out cases were excluded from patch-generation context. "
-                "LLM judgments remain pending human calibration. Targeted scores are development signals, not comparable full-set improvement claims. "
-                "Full evaluation is pending the daily checkpoint (24 hours AND a new version), or an explicit manual run.\n\n"
-                "## Arize/Phoenix skills used by the repair agent\n\n" +
-                ("\n".join(f"- `{s['skill']}/{s['document']}` — [pinned source]({s['source']}), SHA-256 `{s['sha256']}`."
-                           for s in payload.get("skill_usage", [])) or "Legacy proposal: no runtime skill usage recorded.") +
-                "\n\n## Review\n\nThis change was proposed automatically from sanitized execution evidence. Human review and approval are required; no merge or deployment is automated.\n")
-        (directory / "pr-description.md").write_text(body, encoding="utf-8")
-        (directory / "comparison.json").write_text(json.dumps(payload["gate"], indent=2), encoding="utf-8")
-        if not payload["gate"]["passed"]:
-            update(repair_id, "rejected", payload)
-            return repair_id
-        update(repair_id, "awaiting_review", payload)
-        try:
-            previous_files = None
-            if prior and prior.get("pr_url"):
-                previous_files = candidate_files(json.loads((STATE / "repairs" / revision_of / "candidate.json").read_text(encoding="utf-8")), baseline_id)
-                previous_files["tests/test_agent_regressions.py"] = REGRESSION_TEST
-            payload["pr_url"] = publish(payload["root_repair_id"], files, body, baseline_id, previous_files)
-            payload.update(store.setting("publication:" + payload["root_repair_id"], {}))
-            update(repair_id, "pr_open", payload)
-            from quality.checkpoints import register_candidate, publish_status, targets
-            register_candidate(repair_id)
-            target = next(t for t in targets() if t.get("repair_id") == repair_id)
-            publish_status(target, {"conclusion": "pending_full_evaluation"})
-        except Exception as error:
-            payload["publication_error"] = type(error).__name__
-            payload["summary"] += " Validated patch is saved locally; publication needs operator attention."
-            update(repair_id, "awaiting_github_access", payload)
+        from quality.repair_tools import RepairTools
+        if prior:
+            payload["review_findings"] = prior.get("review_findings", [])
+        feedback = ({"previous_candidate": json.loads((STATE / "repairs" / revision_of / "candidate.json").read_text(encoding="utf-8")),
+                     "review_findings": prior.get("review_findings", []),
+                     "instruction": "Revise from development evidence only. Preserve successful fixes and reviewer provenance."} if prior else None)
+        workflow = RepairTools(repair_id, directory, payload, evidence, prior)
+        if not workflow.finished:
+            propose(evidence, baseline_id, feedback, workflow=workflow)
     except EvaluatorReviewRequired as error:
-        payload.update(summary="Evaluator evidence requires review; no agent patch proposed.",
+        payload.update(summary="Evaluator evidence requires review; no new PR published.",
                        evaluator_issue=error.finding, proposal_trace=error.audit,
                        skill_usage=error.audit["skill_usage"], investigation_calls=error.audit["investigation_calls"])
         update(repair_id, "awaiting_human_evidence", payload)
     except Exception as error:
         payload["error"] = type(error).__name__
-        update(repair_id, "failed", payload)
-        raise
+        # Do not erase a successful publication if the SDK's final message fails.
+        if payload.get("sdk_workflow", {}).get("outcome"):
+            update(repair_id, payload["sdk_workflow"]["status"], payload)
+        else:
+            update(repair_id, "failed", payload)
+            raise
     return repair_id

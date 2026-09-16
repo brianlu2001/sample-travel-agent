@@ -77,9 +77,13 @@ no external email delivery is claimed.
    its traffic never enters the live monitoring window or opens live quality alerts.
    Concurrent repairs share one compatible baseline, including one already started
    by a scheduled/manual evaluation. Baseline completion wakes waiting repairs.
-7. The repair agent proposes a bounded prompt/tool patch, runs invariant checks,
-   and executes up to 15 development scenarios. Held-out cases remain outside
-   patch-generation context. Hard checks permit a draft PR with full evaluation pending.
+7. One Claude Agent SDK session owns diagnosis → patch → fixed checks → targeted
+   Phoenix experiment → result inspection → bounded revision → draft PR. Its tools
+   enforce artifact identity and at most three candidates per repair record. Up to
+   15 development scenarios run once per candidate; retries reuse recorded results.
+   Held-out cases remain outside patch-generation context. Hard checks permit a
+   draft PR with full evaluation pending. The worker hosts the session and maintains
+   its lease; it no longer runs a separate proposal/validation/retry loop.
 8. The controller runs a full checkpoint after 24 hours AND an unmeasured version,
    or on manual request. It compares with the original and last approved baselines.
    Confirmed regressions raise incidents and bounded follow-up proposals. A person
