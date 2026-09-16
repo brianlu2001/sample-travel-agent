@@ -7,8 +7,9 @@ claimed for the replay. The original baseline and historical evaluations remain
 unchanged.
 
 The existing `quality.remediation.propose` function started each native SDK
-session. The controller used the existing constrained candidate validation,
-artifact checks, targeted Phoenix experiments and GitHub publication path.
+session. Codex invoked the existing constrained candidate validation, artifact
+checks and targeted Phoenix experiment modules, then updated the existing GitHub
+branch. This operator replay did not originate from an automatic repair queue job.
 The supplied starting version included merged PR #4. The final agent change is
 the exact SDK-returned flight instruction; all other deployed prompt instructions
 and tools are preserved. Codex supplied evidence and review feedback, checked the
@@ -61,6 +62,10 @@ not hide this observation or be presented as human-calibrated accuracy.
 
 The experiment IDs identify immutable measurements; PR #3 contains their final
 scores. Small targeted samples are not comparable full-set improvement claims.
+The final automated results were correctness 14/15, groundedness 9/9 applicable
+(six not applicable), and topic relevance 15/15. No privacy or deterministic tool
+contract failures were recorded. These scores do not resolve the response review
+finding above. Full evaluation is pending the accepted daily/manual cadence.
 The repair is a draft for human inspection and is not automatically merged or
 deployed. Earlier failed proposals and assistant-authored intermediate attempts
 are preserved separately; the final diff is the SDK revision.
